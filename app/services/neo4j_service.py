@@ -194,7 +194,7 @@ class Neo4jService:
     
     def get_all_roles(self):
         """
-        Retrieve all role nodes from Neo4j
+        Retrieve all role nodes from Neo4j with their skill relationships
         
         Returns:
             list: List of dictionaries containing role information
@@ -205,8 +205,19 @@ class Neo4jService:
         
         try:
             query = """
-            MATCH (role:Role) 
-            RETURN role {.*} as role
+            MATCH (role:Role)
+            OPTIONAL MATCH (role)-[rel:REQUIRES_SKILL]->(skill:Skill)
+            WITH role, 
+                 collect({name: skill.name, importance: rel.importance, is_required: rel.is_required}) AS skills
+            RETURN role {
+                .*, 
+                skills: skills,
+                required_skills: CASE 
+                    WHEN size(skills) > 0 
+                    THEN reduce(s = "", skill IN skills | s + (CASE WHEN s = "" THEN "" ELSE ", " END) + skill.name) 
+                    ELSE "" 
+                END
+            } as role
             """
             
             results = self.run_query(query)
@@ -323,17 +334,16 @@ class Neo4jService:
             return False
             
         try:
-            # Delete all Person nodes and their relationships
+            # Delete all CV nodes and detach their relationships
             query = """
-            MATCH (p:Person)
-            OPTIONAL MATCH (p)-[r]->(n)
-            DETACH DELETE p, n
+            MATCH (p:CV)
+            DETACH DELETE p
             """
             
             self.run_query(query)
             logger.info("Deleted all CV nodes")
             return True
-            
+        
         except Exception as e:
             logger.error(f"Error deleting all CV nodes: {e}")
             return False
@@ -377,9 +387,10 @@ class Neo4jService:
 
 
     def add_role(self, role_id, job_title, degree_requirement, field_of_study, 
-                experience_years, required_skills, location_remote):
+                experience_years, required_skills, location_remote,
+                industry_sector="", role_level=""):
         """
-        Add a new role to Neo4j
+        Add a new role to Neo4j with improved skill representation
         
         Returns:
             bool: Success or failure
@@ -389,6 +400,40 @@ class Neo4jService:
             return False
         
         try:
+            # Parse required_skills into a structured format with importance
+            # Input format should be: "Skill:importance:required,Skill2:importance:required"
+            # Example: "Python:8:true,SQL:5:false"
+            skill_relationships = []
+            skills_to_process = []
+            
+            if isinstance(required_skills, str) and required_skills:
+                skills_list = [s.strip() for s in required_skills.split(',')]
+                for skill_entry in skills_list:
+                    if ':' in skill_entry:
+                        parts = skill_entry.split(':')
+                        if len(parts) >= 3:
+                            skill_name = parts[0].strip()
+                            try:
+                                importance = int(parts[1].strip())
+                                is_required = parts[2].lower() == 'true'
+                            except ValueError:
+                                importance = 5  # Default importance
+                                is_required = True  # Default required
+                            
+                            skills_to_process.append({
+                                "name": skill_name,
+                                "importance": importance,
+                                "is_required": is_required
+                            })
+                    else:
+                        # Default format if no importance/required flags
+                        skills_to_process.append({
+                            "name": skill_entry,
+                            "importance": 5,
+                            "is_required": True
+                        })
+            
+            # Create the role node
             query = """
             CREATE (r:Role {
                 id: $id,
@@ -396,8 +441,9 @@ class Neo4jService:
                 degree_requirement: $degree_requirement,
                 field_of_study: $field_of_study,
                 experience_years: $experience_years,
-                required_skills: $required_skills,
                 location_remote: $location_remote,
+                industry_sector: $industry_sector,
+                role_level: $role_level,
                 created_at: datetime()
             })
             RETURN r.id as id
@@ -409,14 +455,36 @@ class Neo4jService:
                 "degree_requirement": degree_requirement,
                 "field_of_study": field_of_study,
                 "experience_years": int(experience_years),
-                "required_skills": required_skills,
-                "location_remote": location_remote
+                "location_remote": location_remote,
+                "industry_sector": industry_sector,
+                "role_level": role_level
             }
             
             results = self.run_query(query, params)
             
             if results and len(results) > 0:
-                logger.info(f"Added new Role with ID: {role_id}")
+                # Now create skill nodes and relationships
+                for skill_data in skills_to_process:
+                    skill_query = """
+                    MERGE (s:Skill {name: $skill_name})
+                    WITH s
+                    MATCH (r:Role {id: $role_id})
+                    MERGE (r)-[rel:REQUIRES_SKILL {
+                        importance: $importance,
+                        is_required: $is_required
+                    }]->(s)
+                    """
+                    
+                    skill_params = {
+                        "role_id": role_id,
+                        "skill_name": skill_data["name"],
+                        "importance": skill_data["importance"],
+                        "is_required": skill_data["is_required"]
+                    }
+                    
+                    self.run_query(skill_query, skill_params)
+                    
+                logger.info(f"Added new Role with ID: {role_id} and associated skills")
                 return True
             else:
                 logger.error("Failed to add Role")
@@ -427,9 +495,10 @@ class Neo4jService:
             return False
 
     def update_role(self, role_id, job_title, degree_requirement, field_of_study, 
-                    experience_years, required_skills, location_remote):
+                    experience_years, required_skills, location_remote,
+                    industry_sector="", role_level=""):
         """
-        Update an existing role in Neo4j
+        Update an existing role in Neo4j with improved skill representation
         
         Returns:
             bool: Success or failure
@@ -439,14 +508,46 @@ class Neo4jService:
             return False
         
         try:
+            # Parse required_skills into a structured format
+            # Input format should be: "Skill:importance:required,Skill2:importance:required"
+            skills_to_process = []
+            
+            if isinstance(required_skills, str) and required_skills:
+                skills_list = [s.strip() for s in required_skills.split(',')]
+                for skill_entry in skills_list:
+                    if ':' in skill_entry:
+                        parts = skill_entry.split(':')
+                        if len(parts) >= 3:
+                            skill_name = parts[0].strip()
+                            try:
+                                importance = int(parts[1].strip())
+                                is_required = parts[2].lower() == 'true'
+                            except ValueError:
+                                importance = 5
+                                is_required = True
+                            
+                            skills_to_process.append({
+                                "name": skill_name,
+                                "importance": importance,
+                                "is_required": is_required
+                            })
+                    else:
+                        skills_to_process.append({
+                            "name": skill_entry,
+                            "importance": 5,
+                            "is_required": True
+                        })
+            
+            # Update the role node
             query = """
             MATCH (r:Role {id: $id})
             SET r.job_title = $job_title,
                 r.degree_requirement = $degree_requirement,
                 r.field_of_study = $field_of_study,
                 r.experience_years = $experience_years,
-                r.required_skills = $required_skills,
                 r.location_remote = $location_remote,
+                r.industry_sector = $industry_sector,
+                r.role_level = $role_level,
                 r.updated_at = datetime()
             RETURN r.id as id
             """
@@ -457,14 +558,43 @@ class Neo4jService:
                 "degree_requirement": degree_requirement,
                 "field_of_study": field_of_study,
                 "experience_years": int(experience_years),
-                "required_skills": required_skills,
-                "location_remote": location_remote
+                "location_remote": location_remote,
+                "industry_sector": industry_sector,
+                "role_level": role_level
             }
             
             results = self.run_query(query, params)
             
             if results and len(results) > 0:
-                logger.info(f"Updated Role with ID: {role_id}")
+                # First remove all existing skill relationships
+                delete_skills_query = """
+                MATCH (r:Role {id: $role_id})-[rel:REQUIRES_SKILL]->()
+                DELETE rel
+                """
+                self.run_query(delete_skills_query, {"role_id": role_id})
+                
+                # Now create new skill nodes and relationships
+                for skill_data in skills_to_process:
+                    skill_query = """
+                    MERGE (s:Skill {name: $skill_name})
+                    WITH s
+                    MATCH (r:Role {id: $role_id})
+                    MERGE (r)-[rel:REQUIRES_SKILL {
+                        importance: $importance,
+                        is_required: $is_required
+                    }]->(s)
+                    """
+                    
+                    skill_params = {
+                        "role_id": role_id,
+                        "skill_name": skill_data["name"],
+                        "importance": skill_data["importance"],
+                        "is_required": skill_data["is_required"]
+                    }
+                    
+                    self.run_query(skill_query, skill_params)
+                    
+                logger.info(f"Updated Role with ID: {role_id} and associated skills")
                 return True
             else:
                 logger.error(f"Failed to update Role with ID: {role_id} - Role not found")
@@ -506,3 +636,20 @@ class Neo4jService:
         except Exception as e:
             logger.error(f"Error deleting Role: {e}")
             return False
+        
+    def find_matching_candidates(self, role_id, limit=10):
+
+        pass
+        #Don't consider the code below. It might change
+        # """Find candidates matching a specific role"""
+        # query = """
+        # MATCH (role:Role {id: $role_id})
+        # MATCH (role)-[req:REQUIRES_SKILL]->(skill:Skill)<-[has:HAS_SKILL]-(person:Person)
+        # WITH person, 
+        #      sum(CASE WHEN req.is_required THEN req.importance * 2 ELSE req.importance END) as skillScore
+        # ORDER BY skillScore DESC
+        # LIMIT $limit
+        # RETURN person.id as id, person.role as role, person.description as description, 
+        #        skillScore as score
+        # """
+        # return self.run_query(query, {"role_id": role_id, "limit": limit})

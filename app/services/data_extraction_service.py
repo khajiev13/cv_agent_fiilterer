@@ -1,13 +1,17 @@
+from string import Template
+from pathlib import Path
+from dotenv import load_dotenv
+from openai import AsyncAzureOpenAI
+from pydantic import BaseModel, Field, validator
+from typing import Optional, List
+import logging
+import openai
+import asyncio
 import os
 import json
 import re
-from string import Template
-from pathlib import Path
-import asyncio
-from dotenv import load_dotenv
-import openai
-from openai import AsyncAzureOpenAI
-import logging
+
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -15,6 +19,27 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+
+class JobPostingData(BaseModel):
+    job_title: str = Field(default="")
+    degree_requirement: str = Field(default="Any")
+    field_of_study: str = Field(default="")
+    experience_years: int = Field(default=0)
+    required_skills: str = Field(default="")
+    location_remote: str = Field(default="")
+    industry_sector: str = Field(default="")
+    role_level: str = Field(default="")
+    
+    @validator('degree_requirement')
+    def validate_degree(cls, v):
+        valid_degrees = ["Any", "Bachelor's", "Master's", "PhD"]
+        return v if v in valid_degrees else "Any"
+    
+    @validator('experience_years')
+    def validate_experience(cls, v):
+        return max(0, v)  # Ensure non-negative
+
 
 class DataExtractionService:
     def __init__(self):
@@ -159,53 +184,61 @@ Answer:
             logger.error(f"Entity extraction error: {e}")
             return {"entities": []}
 
-    async def extract_all_entities(self, cv_text, cv_filename):
-        """Extract all entity types from a CV"""
-        results = {"entities": [], "relationships": []}
+    
+    async def extract_job_posting_information_for_form(self, job_posting_text):
+        """Extract job posting information to pre-fill the role form using Pydantic"""
+        logger.info("Extracting job posting information")
         
-        # Extract Person entities
-        person_result = await self.extract_entities(self.person_prompt_tpl, cv_text, cv_filename)
-        if person_result and "entities" in person_result:
-            results["entities"].extend(person_result["entities"])
+        try:
+            # Define prompt for job posting extraction
+            prompt = """Extract key information from the job posting text below. Return ONLY a JSON object with these fields:
+            - job_title: The title of the job position
+            - degree_requirement: One of ["Any", "Bachelor's", "Master's", "PhD"]
+            - field_of_study: Required field of study (e.g., "Computer Science, Engineering")
+            - experience_years: Required years of experience as an integer
+            - required_skills: List key skills in format "Skill1:importance:required,Skill2:importance:required"
+              where importance is 1-10 and required is true/false
+            - location_remote: Job location or remote policy
+            - industry_sector: Industry the role belongs to
+            - role_level: Seniority level (e.g., "Junior", "Senior", "Manager")
+    
+            Job posting:
+            {job_posting}
+    
+            Return ONLY valid JSON:
+            """
             
-            # If we found a person, extract other entities
-            if person_result["entities"]:
-                # Get the person ID for relationship creation
-                person_id = person_result["entities"][0]["id"]
+            response = await self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[{"role": "user", "content": prompt.format(job_posting=job_posting_text)}],
+                temperature=0.1,
+                max_tokens=1024
+            )
+            
+            result_text = response.choices[0].message.content
+            
+            # Extract JSON content from response
+            json_match = re.search(r'(\{.*\})', result_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+                extracted_dict = json.loads(json_str)
                 
-                # Extract Position and Company entities 
-                position_result = await self.extract_entities(self.position_prompt_tpl, cv_text)
-                if position_result:
-                    if "entities" in position_result:
-                        results["entities"].extend(position_result["entities"])
-                    if "relationships" in position_result:
-                        results["relationships"].extend(position_result["relationships"])
-                        # Add relationships from Person to each Position
-                        for entity in position_result.get("entities", []):
-                            if entity.get("label") == "Position":
-                                results["relationships"].append(f"{person_id}|HAS_POSITION|{entity['id']}")
+                # Create and return JobPostingData object
+                job_data = JobPostingData(
+                    job_title=extracted_dict.get('job_title', ''),
+                    degree_requirement=extracted_dict.get('degree_requirement', 'Any'),
+                    field_of_study=extracted_dict.get('field_of_study', ''),
+                    experience_years=extracted_dict.get('experience_years', 0),
+                    required_skills=extracted_dict.get('required_skills', ''),
+                    location_remote=extracted_dict.get('location_remote', ''),
+                    industry_sector=extracted_dict.get('industry_sector', ''),
+                    role_level=extracted_dict.get('role_level', '')
+                )
+                return job_data
+            else:
+                logger.error("Failed to extract JSON from response")
+                return JobPostingData()  # Return empty object
                 
-                # Extract Skills
-                skill_result = await self.extract_entities(self.skill_prompt_tpl, cv_text)
-                if skill_result and "entities" in skill_result:
-                    results["entities"].extend(skill_result["entities"])
-                    # Add relationships from Person to each Skill
-                    for entity in skill_result.get("entities", []):
-                        if entity.get("label") == "Skill":
-                            results["relationships"].append(f"{person_id}|HAS_SKILL|{entity['id']}")
-                
-                # Extract Education
-                edu_result = await self.extract_entities(self.edu_prompt_tpl, cv_text)
-                if edu_result and "entities" in edu_result:
-                    results["entities"].extend(edu_result["entities"])
-                    # Add relationships from Person to each Education
-                    for entity in edu_result.get("entities", []):
-                        if entity.get("label") == "Education":
-                            results["relationships"].append(f"{person_id}|HAS_EDUCATION|{entity['id']}")
-        
-        return results
-
-    async def process_cv(self, cv_text, cv_filename):
-        """Process a CV and extract all entities and relationships"""
-        logger.info(f"Processing CV: {cv_filename}")
-        return await self.extract_all_entities(cv_text, cv_filename)
+        except Exception as e:
+            logger.error(f"Error extracting job posting information: {e}")
+            return JobPostingData()  # Return empty object on error

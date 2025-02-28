@@ -4,6 +4,10 @@ import time
 import json
 from datetime import datetime
 from services.neo4j_service import Neo4jService
+import os
+from utils.file_utils import delete_cv_file, CV_DATA_DIR, delete_cv_file
+
+
 
 def show_manage_cvs(neo4j_service:Neo4jService):
     st.header("📋 Manage CVs", divider="rainbow")
@@ -59,22 +63,52 @@ def show_manage_cvs(neo4j_service:Neo4jService):
                         # Create a progress bar
                         progress_bar = st.progress(0)
                         
-                        # Delete from Neo4j if connected
-                        if neo4j_service and neo4j_service.is_connected():
-                            success = neo4j_service.delete_all_cv_nodes()
+                        # Store file paths before deleting from Neo4j
+                        file_paths_to_delete = []
+                        for cv in cvs:
+                            # Check if file_path exists in the CV node data
+                            if 'file_path' in cv and cv['file_path']:
+                                file_paths_to_delete.append(cv['file_path'])
+                            # If file_path doesn't exist but filename does, construct the path
+                            elif 'filename' in cv or 'file_name' in cv:
+                                filename = cv.get('filename', cv.get('file_name', ''))
+                                if filename:
+                                    file_path = os.path.join(CV_DATA_DIR, filename)
+                                    file_paths_to_delete.append(file_path)
                         
-                        # Update progress
-                        for i in range(total_count):
-                            progress = (i + 1) / total_count
+                        # Delete from Neo4j if connected
+                        db_success = False
+                        if neo4j_service and neo4j_service.is_connected():
+                            db_success = neo4j_service.delete_all_cv_nodes()
+                        
+                        # Delete physical files
+                        file_success = True
+                        deleted_count = 0
+                        
+                        for i, file_path in enumerate(file_paths_to_delete):
+                            # Delete the file
+                            
+                            if delete_cv_file(file_path):
+                                deleted_count += 1
+                            else:
+                                file_success = False
+                            
+                            # Update progress (weight Neo4j deletion as half the job)
+                            progress = 0.5 + ((i + 1) / len(file_paths_to_delete) * 0.5)
                             progress_bar.progress(progress)
-                            time.sleep(0.1)
+                            time.sleep(0.05)
+                        
+                        success = db_success and file_success
                         
                         if success:
-                            st.toast(f"Successfully deleted all {total_count} CVs.")
+                            st.toast(f"Successfully deleted all {total_count} CVs from database and {deleted_count} CV files from disk.")
                             st.session_state.confirm_delete_all = False
                             time.sleep(1)
                         else:
-                            st.error("Failed to delete CVs.")
+                            if not db_success:
+                                st.error("Failed to delete CVs from database.")
+                            if not file_success:
+                                st.error(f"Failed to delete some CV files. Deleted {deleted_count} of {len(file_paths_to_delete)}.")
             
             with confirm_col2:
                 if st.button("❌ Cancel", use_container_width=True):
