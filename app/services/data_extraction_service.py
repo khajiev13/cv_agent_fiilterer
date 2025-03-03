@@ -3,6 +3,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import AsyncAzureOpenAI
 from pydantic import BaseModel, Field, validator
+from app.pyd_models.models import PersonResponse,PositionResponse,  EducationResponse, SkillResponse,ProjectResponse
 from typing import Optional, List
 import logging
 import openai
@@ -19,6 +20,22 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+# Add this after the JobPostingData class
+
+class CVData(BaseModel):
+    person_name: str = Field(default="")
+    current_role: str = Field(default="")
+    years_experience: int = Field(default=0)
+    summary: str = Field(default="")
+    skills: List[dict] = Field(default_factory=list)  # List of {name, level, years_experience, last_used}
+    positions: List[dict] = Field(default_factory=list)  # List of position details
+    education: List[dict] = Field(default_factory=list)  # List of education details
+    projects: List[dict] = Field(default_factory=list)  # List of project details
+    
+    @validator('years_experience')
+    def validate_experience(cls, v):
+        return max(0, v)  # Ensure non-negative
 
 
 class JobPostingData(BaseModel):
@@ -103,12 +120,13 @@ Answer:
         self.skill_prompt_tpl = """From the Resume text below, extract Entities strictly as instructed below
 1. Look for prominent Skill Entities in the text. The`id` property of each entity must be alphanumeric and must be unique among the entities. NEVER create new entity types that aren't mentioned below:
     Entity Definition:
-    label:'Skill',id:string,name:string,level:string //Skill Node
+    label:'Skill',id:string,name:string,level:string,years_experience:integer,last_used:string //Skill Node
 2. NEVER Impute missing values
 3. If you do not find any level information: assume it as `expert` if the experience in that skill is more than 5 years, `intermediate` for 2-5 years and `beginner` otherwise.
 4. Focus especially on technical skills, programming languages, tools, frameworks, and domain knowledge
+5. Try to extract the number of years of experience with each skill and when it was last used
 Example Output Format:
-{"entities": [{"label":"Skill","id":"skill1","name":"Neo4j","level":"expert"},{"label":"Skill","id":"skill2","name":"Pytorch","level":"expert"}]}
+{"entities": [{"label":"Skill","id":"skill1","name":"Neo4j","level":"expert","years_experience":6,"last_used":"2023"},{"label":"Skill","id":"skill2","name":"Pytorch","level":"intermediate","years_experience":3,"last_used":"2022"}]}
 
 Question: Now, extract entities as mentioned above for the text below -
 $ctext
@@ -134,14 +152,46 @@ Question: Now, extract Education information as mentioned above for the text bel
 $ctext
 
 Answer:
+
+"""
+        self.project_prompt_tpl = """From the Resume text for a job aspirant, extract Project information:
+    Entity Definition:
+    label:'Project',id:string,name:string,description:string,technologies:string,start_date:string,end_date:string,outcomes:string,url:string //Project Node
+
+1. Look for significant projects mentioned in the resume
+2. Extract measurable outcomes where available
+3. List technologies used as comma-separated values
+4. Create relationships between projects and skills
+
+Output Format:
+{"entities": [{"label":"Project","id":"project1","name":"Database Migration","description":"Migrated legacy database to cloud","technologies":"PostgreSQL,AWS,Python","outcomes":"Reduced costs by 30%, improved query speed by 50%"}]}
+
+Question: Now, extract Project information from the text below -
+$ctext
+
+Answer:
 """
 
     def clean_text(self, text):
         """Clean text to remove non-ASCII characters"""
         return re.sub(r'[^\x00-\x7F]+', ' ', text)
 
-    async def extract_entities(self, prompt, cv_text, cv_filename=None):
-        """Extract entities from CV text using Azure OpenAI"""
+    
+# Update the extract_entities method
+
+    async def extract_entities(self, prompt, cv_text, cv_filename=None, response_model=None):
+        """
+        Extract entities from CV text using Azure OpenAI with Pydantic model validation
+        
+        Args:
+            prompt: Prompt template to use
+            cv_text: CV text content
+            cv_filename: Optional CV filename to replace in template
+            response_model: Pydantic model class to validate response against
+            
+        Returns:
+            Validated Pydantic model or dict with entities
+        """
         try:
             # Replace $cv_filename placeholder if present in the prompt
             if cv_filename and '$cv_filename' in prompt:
@@ -150,39 +200,129 @@ Answer:
             # Prepare the prompt with CV text
             _prompt = Template(prompt).substitute(ctext=self.clean_text(cv_text))
             
+            # Add JSON instruction if using response_format
+            messages_content = _prompt
+            if response_model:
+                if "json" not in _prompt.lower():
+                    messages_content = _prompt + "\n\nProvide the answer in JSON format."
+            
             # Call Azure OpenAI
             response = await self.client.chat.completions.create(
                 model=self.deployment_name,
-                messages=[{"role": "user", "content": _prompt}],
+                messages=[{"role": "user", "content": messages_content}],
                 temperature=0,
                 max_tokens=1024,
-                top_p=0.8
+                top_p=0.8,
+                response_format={"type": "json_object"} if response_model else None
             )
             
             # Extract and parse result
             result_text = response.choices[0].message.content
             if 'Answer:' in result_text:
                 result_text = result_text.split('Answer:')[1].strip()
-                
-            # Parse JSON from result
+            
+            # Remove JSON code block markers if present
+            result_text = self._clean_json_response(result_text)
+            
             try:
-                extraction = json.loads(result_text.replace("'", '"').replace('`', ''))
-                return extraction
+                # Parse as JSON first
+                extraction_dict = json.loads(result_text)
+                
+                # If a response model is provided, validate against it
+                if response_model:
+                    try:
+                        validated_model = response_model.parse_obj(extraction_dict)
+                        return validated_model
+                    except Exception as validation_error:
+                        logger.error(f"Model validation error: {validation_error}")
+                        # Fall back to returning the raw dictionary
+                        return extraction_dict
+                else:
+                    return extraction_dict
+                    
             except json.JSONDecodeError as e:
                 # Handle incomplete JSON responses
                 logger.error(f"JSON parse error: {e}")
                 # Attempt to recover from common JSON issues
-                # Find the last complete object and add closing brackets
-                result_text = result_text[:result_text.rfind("}")+1] + ']}'
                 try:
-                    return json.loads(result_text.replace("'", '"'))
+                    # Try to fix the JSON
+                    cleaned_json = self._fix_json_response(result_text)
+                    extraction_dict = json.loads(cleaned_json)
+                    
+                    # If a response model is provided, validate
+                    if response_model:
+                        try:
+                            validated_model = response_model.parse_obj(extraction_dict)
+                            return validated_model
+                        except:
+                            return extraction_dict
+                    else:
+                        return extraction_dict
+                        
                 except:
-                    logger.error(f"Failed to recover malformed JSON: {result_text}")
+                    logger.error(f"Failed to recover malformed JSON: {result_text[:200]}...")
+                    # Return empty response matching expected model if provided
+                    if response_model:
+                        try:
+                            return response_model.parse_obj({"entities": []})
+                        except:
+                            pass
                     return {"entities": []}
-                
+                    
         except Exception as e:
             logger.error(f"Entity extraction error: {e}")
+            if response_model:
+                try:
+                    return response_model.parse_obj({"entities": []})
+                except:
+                    pass
             return {"entities": []}
+        
+
+    def _clean_json_response(self, text):
+        """Clean JSON response from code blocks and other formatting"""
+        # Remove code block markers if present
+        json_pattern = r'```(?:json)?(.*?)```'
+        matches = re.findall(json_pattern, text, re.DOTALL)
+        
+        if matches:
+            # Use the first match that looks like JSON
+            for match in matches:
+                cleaned = match.strip()
+                if cleaned.startswith('{') and ('}' in cleaned):
+                    return cleaned
+        
+        # If no code blocks found or they didn't contain valid JSON,
+        # try to extract JSON directly
+        json_start = text.find('{')
+        json_end = text.rfind('}')
+        
+        if json_start != -1 and json_end != -1 and json_end > json_start:
+            return text[json_start:json_end+1]
+            
+        # Return original if we couldn't extract anything
+        return text
+    def _fix_json_response(self, text):
+        """Attempt to fix common JSON issues in API responses"""
+        # Replace single quotes with double quotes
+        text = text.replace("'", '"')
+        
+        # Make sure we have a valid JSON object
+        if not text.strip().startswith('{'):
+            text = '{' + text
+        
+        if not text.strip().endswith('}'):
+            text = text + '}'
+            
+        # Try to find and fix simple syntax errors
+        # Ensure "entities" has proper array brackets
+        if '"entities":' in text and not '"entities": [' in text:
+            text = text.replace('"entities":', '"entities": [')
+            if not ']' in text.split('"entities": [')[1]:
+                # Add closing bracket before the final }
+                text = text[:-1] + ']}'
+                
+        return text
 
     
     async def extract_job_posting_information_for_form(self, job_posting_text):
@@ -242,3 +382,137 @@ Answer:
         except Exception as e:
             logger.error(f"Error extracting job posting information: {e}")
             return JobPostingData()  # Return empty object on error
+        
+    # Add this method to the DataExtractionService class
+
+        # Update the extract_cv_data method
+    
+    async def extract_cv_data(self, cv_text, cv_filename=None):
+        """
+        Extract structured data from a CV using Pydantic models for validation
+        
+        Args:
+            cv_text: The text content of the CV
+            cv_filename: The filename of the CV
+            
+        Returns:
+            CVData: Structured CV data
+        """
+        logger.info(f"Extracting data from CV: {cv_filename}")
+        
+        try:
+            # Extract all entities with proper model validation
+            person_data = await self.extract_entities(
+                self.person_prompt_tpl, 
+                cv_text, 
+                cv_filename, 
+                PersonResponse
+            )
+            
+            position_data = await self.extract_entities(
+                self.position_prompt_tpl, 
+                cv_text, 
+                None, 
+                PositionResponse
+            )
+            
+            education_data = await self.extract_entities(
+                self.edu_prompt_tpl, 
+                cv_text, 
+                None, 
+                EducationResponse
+            )
+            
+            skill_data = await self.extract_entities(
+                self.skill_prompt_tpl, 
+                cv_text, 
+                None, 
+                SkillResponse
+            )
+            
+            project_data = await self.extract_entities(
+                self.project_prompt_tpl, 
+                cv_text, 
+                None, 
+                ProjectResponse
+            )
+            
+            # Process person data
+            person_name = ""
+            current_role = ""
+            summary = ""
+            
+            if hasattr(person_data, 'entities') and person_data.entities:
+                person_entity = person_data.entities[0]
+                person_name = person_entity.id.replace("person", "").strip()
+                current_role = person_entity.role
+                summary = person_entity.description
+            
+            # Process position data to calculate total experience
+            positions = []
+            total_years = 0
+            
+            if hasattr(position_data, 'entities'):
+                for entity in position_data.entities:
+                    if hasattr(entity, 'label') and entity.label == 'Position':
+                        years = entity.years_experience
+                        total_years += years
+                        
+                        positions.append({
+                            'title': entity.title,
+                            'location': entity.location,
+                            'start_date': entity.startDate,
+                            'end_date': entity.endDate,
+                            'years_experience': years
+                        })
+            
+            # Process skills
+            skills = []
+            if hasattr(skill_data, 'entities'):
+                for entity in skill_data.entities:
+                    skills.append({
+                        'name': entity.name,
+                        'level': entity.level,
+                        'years_experience': entity.years_experience,
+                        'last_used': entity.last_used
+                    })
+            
+            # Process education
+            education = []
+            if hasattr(education_data, 'entities'):
+                for entity in education_data.entities:
+                    education.append({
+                        'degree': entity.degree,
+                        'university': entity.university,
+                        'graduation_date': entity.graduationDate,
+                        'field_of_study': entity.field_of_study
+                    })
+            
+            # Process projects
+            projects = []
+            if hasattr(project_data, 'entities'):
+                for entity in project_data.entities:
+                    projects.append({
+                        'name': entity.name,
+                        'description': entity.description,
+                        'technologies': entity.technologies.split(',') if entity.technologies else [],
+                        'outcomes': entity.outcomes
+                    })
+            
+            # Create and return CVData object
+            cv_data = CVData(
+                person_name=person_name,
+                current_role=current_role,
+                years_experience=int(total_years),
+                summary=summary,
+                skills=skills,
+                positions=positions,
+                education=education,
+                projects=projects
+            )
+            
+            return cv_data
+            
+        except Exception as e:
+            logger.error(f"Error extracting CV data: {e}")
+            return CVData()  # Return empty object on error

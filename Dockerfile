@@ -1,11 +1,12 @@
-FROM docker.1panel.dev/library/python:3.9-slim
+FROM docker.1panel.dev/library/python:3.11-slim
+#FROM python:3.9-slim
 
 WORKDIR /app
 
 COPY requirements.txt .
 
 #Install packages for file processing
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --fix-missing \
     python3-dev \
     libxml2-dev \
     libxslt1-dev \

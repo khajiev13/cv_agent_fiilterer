@@ -3,10 +3,22 @@ from app.utils.file_utils import save_uploaded_file
 import time
 import uuid
 import os
+import asyncio
 from datetime import datetime
 from services.neo4j_service import Neo4jService
+from services.background_processor import CVProcessorService
+import threading
 
 
+# Create a global processor service
+cv_processor = CVProcessorService()
+
+# Function to run background processing in a separate thread
+def start_background_processing():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(cv_processor.start_background_processing())
+    loop.close()
 def show_upload_cv(neo4j_service:Neo4jService):
     st.header("📤 Upload CVs", divider="rainbow")
     
@@ -45,12 +57,17 @@ def show_upload_cv(neo4j_service:Neo4jService):
                     unique_id = str(uuid.uuid4())
                     file_extension = os.path.splitext(uploaded_file.name)[1]
                     unique_file_name = f"{unique_id}{file_extension}"
+                    
                     # Save the file with unique filename
                     file_name, file_path = save_uploaded_file(uploaded_file, unique_file_name)
-                    # Create Neo4j CV node
+                    
+                    # Create Neo4j CV node with extracted=false
                     success = neo4j_service.insert_cv_node(file_name=file_name)
-                    success_count += 1
-                        # Update progress
+                    
+                    if success:
+                        success_count += 1
+                    
+                    # Update progress
                     progress = (i + 1) / total_files
                     progress_bar.progress(progress)
                     time.sleep(0.2)  # Small delay for visual feedback
@@ -59,6 +76,13 @@ def show_upload_cv(neo4j_service:Neo4jService):
                 
                 if success_count == total_files:
                     status.update(label=f"✅ Successfully uploaded {success_count} CV(s)!", state="complete")
+                    
+                    # Start background processing in a separate thread
+                    thread = threading.Thread(target=start_background_processing)
+                    thread.daemon = True
+                    thread.start()
+                    
+                    st.info("CV processing has started in the background.")
                     st.balloons()
                 else:
                     status.update(label=f"Uploaded {success_count} of {total_files} CV(s)", state="complete")
@@ -67,3 +91,11 @@ def show_upload_cv(neo4j_service:Neo4jService):
                 st.session_state.clear_file_uploader = True
     else:
         st.info("Drag and drop CV files here or click to browse")
+
+    # Show extraction status
+    if st.button("Check Extraction Status"):
+        unextracted = neo4j_service.get_unextracted_cvs()
+        if unextracted:
+            st.warning(f"There are {len(unextracted)} CVs still being processed.")
+        else:
+            st.success("All CVs have been processed!")

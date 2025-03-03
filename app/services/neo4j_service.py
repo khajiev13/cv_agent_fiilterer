@@ -325,7 +325,8 @@ class Neo4jService:
     
     def delete_all_cv_nodes(self):
         """
-        Delete all CV nodes and their connected data
+        Delete all CV nodes and their connected data including derived Person nodes 
+        and all related data (Skills, Education, etc.), preserving Role nodes
         
         Returns:
             bool: True if deleted successfully, False otherwise
@@ -334,20 +335,45 @@ class Neo4jService:
             return False
             
         try:
-            # Delete all CV nodes and detach their relationships
-            query = """
-            MATCH (p:CV)
-            DETACH DELETE p
+            # First get all CV file_names for logging
+            query_get_cvs = """
+            MATCH (c:CV)
+            RETURN c.file_name as file_name
             """
+            cv_results = self.run_query(query_get_cvs)
+            cv_count = len(cv_results) if cv_results else 0
             
-            self.run_query(query)
-            logger.info("Deleted all CV nodes")
+            # Delete all Person nodes and cascading delete all connected nodes (except Role)
+            delete_query = """
+            // Match all Person nodes (derived from CVs)
+            MATCH (p:Person)
+            
+            // Match all directly connected nodes
+            OPTIONAL MATCH (p)-[r1]-(connected)
+            WHERE NOT connected:Role
+            
+            // Match secondary connected nodes
+            OPTIONAL MATCH (connected)-[r2]-(secondary)
+            WHERE NOT secondary:Role AND connected:Position OR connected:Education OR connected:Project
+            
+            // Delete all relationships and nodes
+            DETACH DELETE p, connected, secondary
+            """
+            self.run_query(delete_query)
+            
+            # Delete CV nodes
+            cv_query = """
+            MATCH (c:CV)
+            DETACH DELETE c
+            """
+            self.run_query(cv_query)
+            
+            logger.info(f"Deleted all CV nodes ({cv_count} total) and their associated data")
             return True
         
         except Exception as e:
-            logger.error(f"Error deleting all CV nodes: {e}")
+            logger.error(f"Error deleting all CV nodes and their data: {e}")
             return False
-
     def insert_cv_node(self, file_name):
         """
         Insert a new CV node into the Neo4j database
@@ -384,7 +410,66 @@ class Neo4jService:
         except Exception as e:
             logger.error(f"Error creating CV node: {e}")
             return False
-
+        
+    def update_cv_extraction_status(self, file_name, status=True):
+        """
+        Update the extraction status of a CV node
+        
+        Args:
+            file_name (str): The filename of the CV
+            status (bool): The extraction status to set
+            
+        Returns:
+            bool: True if updated successfully, False otherwise
+        """
+        if not self.connect():
+            return False
+            
+        try:
+            query = """
+            MATCH (c:CV {file_name: $file_name})
+            SET c.extracted = $status
+            RETURN c
+            """
+            
+            result = self.run_query(query, {"file_name": file_name, "status": status})
+            if result:
+                logger.info(f"Updated extraction status to {status} for CV: {file_name}")
+                return True
+            else:
+                logger.warning(f"CV node not found for file: {file_name}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error updating CV extraction status: {e}")
+            return False
+        
+    
+    def get_unextracted_cvs(self):
+        """
+        Get all CV nodes that have not been extracted
+        
+        Returns:
+            list: List of CV nodes with extracted=false
+        """
+        if not self.connect():
+            return []
+            
+        try:
+            query = """
+            MATCH (c:CV {extracted: false})
+            RETURN c.file_name as file_name
+            """
+            
+            results = self.run_query(query)
+            if results:
+                return [result['file_name'] for result in results]
+            else:
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting unextracted CVs: {e}")
+            return []
 
     def add_role(self, role_id, job_title, degree_requirement, field_of_study, 
                 experience_years, required_skills, location_remote,
@@ -636,6 +721,197 @@ class Neo4jService:
         except Exception as e:
             logger.error(f"Error deleting Role: {e}")
             return False
+        
+    # Add this method to the Neo4jService class
+
+        # Update the insert_cv_data method
+    
+    def insert_cv_data(self, cv_data, cv_filename):
+        """
+        Insert structured CV data into Neo4j all at once using a transaction
+        
+        Args:
+            cv_data: Structured CV data
+            cv_filename: The filename of the CV
+            
+        Returns:
+            bool: True if inserted successfully, False otherwise
+        """
+        if not self.connect():
+            return False
+            
+        try:
+            # Create a unique ID for the person based on filename
+            file_id = cv_filename.replace(".", "_").replace(" ", "_")
+            person_id = f"p{file_id}"
+            
+            with self.driver.session() as session:
+                result = session.execute_write(self._create_cv_data_transaction, person_id, cv_data, cv_filename)
+                
+            logger.info(f"Successfully inserted CV data for {cv_filename}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error inserting CV data: {e}")
+            return False
+    
+    def _create_cv_data_transaction(self, tx, person_id, cv_data, cv_filename):
+        """
+        Create all CV data in a single transaction
+        
+        Args:
+            tx: Neo4j transaction
+            person_id: Person ID
+            cv_data: CV data
+            cv_filename: CV filename
+        """
+        # Create file_id from cv_filename
+        file_id = cv_filename.replace(".", "_").replace(" ", "_")
+        # Create Person node
+        tx.run("""
+        CREATE (p:Person {
+            id: $id,
+            name: $name,
+            role: $role,
+            description: $summary,
+            cv_file_name: $cv_filename,
+            years_experience: $years_experience
+        })
+        """, {
+            "id": person_id,
+            "name": cv_data.person_name,
+            "role": cv_data.current_role,
+            "summary": cv_data.summary,
+            "cv_filename": cv_filename,
+            "years_experience": cv_data.years_experience
+        })
+        
+        # Create Skills
+        for idx, skill in enumerate(cv_data.skills):
+            tx.run("""
+            MERGE (s:Skill {name: $skill_name})
+            WITH s
+            MATCH (p:Person {id: $person_id})
+            CREATE (p)-[r:HAS_SKILL {
+                level: $level,
+                years_experience: $years,
+                last_used: $last_used
+            }]->(s)
+            """, {
+                "person_id": person_id,
+                "skill_name": skill['name'],
+                "level": skill.get('level', ''),
+                "years": skill.get('years_experience', 0),
+                "last_used": skill.get('last_used', '')
+            })
+        
+        # Create Education nodes
+        for idx, edu in enumerate(cv_data.education):
+            edu_id = f"e{file_id}_{idx}"
+            tx.run("""
+            CREATE (e:Education {
+                id: $id,
+                degree: $degree,
+                university: $university,
+                graduation_date: $graduation_date,
+                field_of_study: $field_of_study
+            })
+            WITH e
+            MATCH (p:Person {id: $person_id})
+            CREATE (p)-[r:HAS_EDUCATION]->(e)
+            """, {
+                "id": edu_id,
+                "person_id": person_id,
+                "degree": edu.get('degree', ''),
+                "university": edu.get('university', ''),
+                "graduation_date": edu.get('graduation_date', ''),
+                "field_of_study": edu.get('field_of_study', '')
+            })
+        
+        # Create Position nodes
+        for idx, pos in enumerate(cv_data.positions):
+            pos_id = f"pos{file_id}_{idx}"
+            company_name = pos.get('company', '')  # We'll need to add this to your position data model
+            
+            # Create position node
+            tx.run("""
+            CREATE (j:Position {
+                id: $id,
+                title: $title,
+                location: $location,
+                start_date: $start_date,
+                end_date: $end_date,
+                years_experience: $years
+            })
+            WITH j
+            MATCH (p:Person {id: $person_id})
+            CREATE (p)-[r:HAS_POSITION]->(j)
+            """, {
+                "id": pos_id,
+                "person_id": person_id,
+                "title": pos.get('title', ''),
+                "location": pos.get('location', ''),
+                "start_date": pos.get('start_date', ''),
+                "end_date": pos.get('end_date', ''),
+                "years": pos.get('years_experience', 0)
+            })
+            
+            # If company name exists, create company relationship
+            if company_name:
+                tx.run("""
+                MERGE (c:Company {name: $company_name})
+                WITH c
+                MATCH (j:Position {id: $pos_id})
+                CREATE (j)-[r:AT_COMPANY]->(c)
+                """, {
+                    "company_name": company_name,
+                    "pos_id": pos_id
+                })
+        
+        # Create Project nodes  
+        for idx, proj in enumerate(cv_data.projects):
+            proj_id = f"proj{file_id}_{idx}"
+            
+            tx.run("""
+            CREATE (p:Project {
+                id: $id,
+                name: $name,
+                description: $description,
+                outcomes: $outcomes
+            })
+            WITH p
+            MATCH (person:Person {id: $person_id})
+            CREATE (person)-[r:WORKED_ON]->(p)
+            """, {
+                "id": proj_id,
+                "person_id": person_id,
+                "name": proj.get('name', ''),
+                "description": proj.get('description', ''),
+                "outcomes": proj.get('outcomes', '')
+            })
+            
+            # Add technology relationships for each project
+            for tech in proj.get('technologies', []):
+                if tech and isinstance(tech, str):
+                    tech = tech.strip()
+                    if tech:
+                        tx.run("""
+                        MERGE (s:Skill {name: $tech_name})
+                        WITH s
+                        MATCH (p:Project {id: $proj_id})
+                        CREATE (p)-[r:USES_TECHNOLOGY]->(s)
+                        """, {
+                            "proj_id": proj_id,
+                            "tech_name": tech
+                        })
+        
+        # Update the CV node extraction status
+        tx.run("""
+        MATCH (c:CV {file_name: $cv_filename})
+        SET c.extracted = true
+        """, {"cv_filename": cv_filename})
+        
+        return True
         
     def find_matching_candidates(self, role_id, limit=10):
 
