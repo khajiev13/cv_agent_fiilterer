@@ -3,6 +3,8 @@ from app.st_components.home import show_home
 from app.st_components.upload_cv import show_upload_cv
 from app.st_components.manage_cvs import show_manage_cvs
 from app.st_components.roles import show_roles
+# Import the RAG interface
+from app.st_components.simple_rag_interface import show_simple_rag_interface, show_advanced_rag_interface
 # Import your database and neo4j services
 from app.services.neo4j_service import Neo4jService
 
@@ -54,6 +56,15 @@ def main():
     if st.sidebar.button("🧩 Roles"):
         st.session_state.current_page = "Roles"
         st.rerun()
+        
+    # Add new button for AI Search & Chat
+    if st.sidebar.button("🤖 AI Search & Chat"):
+        st.session_state.current_page = "AI Search & Chat"
+        st.rerun()
+        
+    # Debug mode option for the RAG interface
+    if st.session_state.current_page == "AI Search & Chat":
+        st.session_state.debug_mode = st.sidebar.checkbox("Enable Debug Mode", value=False)
     
     # Display the selected page
     if st.session_state.current_page == "Home":
@@ -64,6 +75,12 @@ def main():
         show_manage_cvs(st.session_state.neo4j_service)
     elif st.session_state.current_page == "Roles":
         show_roles(st.session_state.neo4j_service)
+    elif st.session_state.current_page == "AI Search & Chat":
+        # Choose which version of the RAG interface to show based on debug mode
+        if st.session_state.get("debug_mode", False):
+            show_advanced_rag_interface()
+        else:
+            show_simple_rag_interface()
 
 if __name__ == "__main__":
     main()

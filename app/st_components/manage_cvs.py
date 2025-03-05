@@ -203,7 +203,8 @@ def show_manage_cvs(neo4j_service:Neo4jService):
                         st.markdown(f"- **Data Extraction Status:** {row['Data Extracted']}")
                         
                         # View details button
-                        if st.button(f"🔍 View Details", key=f"details_{row['ID']}"):
+                        button_key = f"details_{row['ID'] if row['ID'] is not None else f'unknown_{i}'}"
+                        if st.button(f"🔍 View Details", key=button_key):
                             st.session_state.view_cv_details = row['ID']
                             st.rerun()
                             

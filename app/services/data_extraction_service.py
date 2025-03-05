@@ -84,8 +84,9 @@ class DataExtractionService:
 5. Restrict yourself to extract only Person information. No Position, Company, Education or Skill information should be focused.
 6. NEVER Impute missing values
 7. Set the cv_file_name property to "$cv_filename"
+8. Extract the full name of the applicant for person_name attribute
 Example Output JSON:
-{"entities": [{"label":"Person","id":"person1","role":"Prompt Developer","description":"Prompt Developer with more than 30 years of LLM experience","cv_file_name":"example_cv.pdf"}]}
+{"entities": [{"label":"Person","id":"person1","role":"Prompt Developer","description":"Prompt Developer with more than 30 years of LLM experience","cv_file_name":"example_cv.pdf","person_name":"John Doe"}]}
 
 Question: Now, extract the Person for the text below -
 $ctext
