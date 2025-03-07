@@ -1,77 +1,65 @@
-from typing import List, Optional, Union
-from pydantic import BaseModel
+from typing import List, Optional, Union, Literal
+from pydantic import BaseModel, Field, validator
+
+
+
+
 
 class PersonEntity(BaseModel):
     label: str = "Person"
     id: str
-    role: str = ""
+    name: str
+    job_title: str = ""
     description: str = ""
-    cv_file_name: str = ""
+    cv_file_address: str = ""
+    cv_text: str = ""
+    last_field_of_study: str = ""
+    last_degree: Literal["bachelor", "master", "phd", "any"] = Field(default="any")
 
-class PositionEntity(BaseModel):
-    label: str = "Position"
+    
+class HasExperienceRelationship(BaseModel):
+    company_name: str = ""
+    experience_in_years: int = 0
+    description: str = ""
+    @validator('experience_in_years')
+    def check_experience_in_years(cls, v):
+        if v < 0:
+            raise ValueError('experience_in_years cannot be negative')
+        return v
+    
+
+class ExperienceEntity(HasExperienceRelationship):
+    job_title: str = ""
+
+class HasSkillRelationship(BaseModel):
+    level: Literal["beginner","intermediate","expert"] = Field(default="beginner")
+    years_experience: int = Field(default=0, ge=0)
+    
+    @validator('years_experience')
+    def check_years_experience(cls, v):
+        if v < 0:
+            raise ValueError('years_experience cannot be negative')
+        return v
+
+class SkillEntity(HasSkillRelationship):
+    name: str = ""
+
+
+
+
+
+# class EducationEntity(BaseModel):
+#     label: str = "Education"
+#     id: str
+#     institution: str = ""
+#     degree: str = ""
+#     field: str = ""
+#     start_date: str = ""
+#     end_date: str = ""
+
+class JobPostingEntity(BaseModel):
+    label: str = "JobPosting"
     id: str
     title: str = ""
-    location: str = ""
-    startDate: str = ""
-    endDate: str = ""
-    years_experience: int = 0
-    url: str = ""
-
-class CompanyEntity(BaseModel):
-    label: str = "Company"
-    id: str
-    name: str = ""
-
-class SkillEntity(BaseModel):
-    label: str = "Skill"
-    id: str
-    name: str = ""
-    level: str = ""
-    years_experience: int = 0
-    last_used: str = ""
-
-class EducationEntity(BaseModel):
-    label: str = "Education"
-    id: str
-    degree: str = ""
-    university: str = ""
-    graduationDate: str = ""
-    score: str = ""
-    url: str = ""
-    field_of_study: str = ""
-
-class ProjectEntity(BaseModel):
-    label: str = "Project"
-    id: str
-    name: str = ""
     description: str = ""
-    technologies: str = ""
-    start_date: str = ""
-    end_date: str = ""
-    outcomes: str = ""
-    url: str = ""
-
-class PersonResponse(BaseModel):
-    entities: List[PersonEntity]
-
-class PositionResponse(BaseModel):
-    entities: List[Union[PositionEntity, CompanyEntity]]
-    relationships: List[str] = []
-
-class EducationResponse(BaseModel):
-    entities: List[EducationEntity]
-
-class SkillResponse(BaseModel):
-    entities: List[SkillEntity]
-
-class ProjectResponse(BaseModel):
-    entities: List[ProjectEntity]
-
-class CVExtraction(BaseModel):
-    """Complete CV extraction containing all entity types"""
-    person: Optional[PersonResponse] = None
-    positions: Optional[PositionResponse] = None
-    education: Optional[EducationResponse] = None
-    skills: Optional[SkillResponse] = None
-    projects: Optional[ProjectResponse] = None
+    posting_text: str = ""

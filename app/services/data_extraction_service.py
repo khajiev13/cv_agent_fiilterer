@@ -1,17 +1,17 @@
-from string import Template
-from pathlib import Path
-from dotenv import load_dotenv
-from openai import AsyncAzureOpenAI
-from pydantic import BaseModel, Field, validator
-from app.pyd_models.models import PersonResponse,PositionResponse,  EducationResponse, SkillResponse,ProjectResponse
-from typing import Optional, List
 import logging
 import openai
 import asyncio
 import os
 import json
 import re
-
+from string import Template
+from pathlib import Path
+from dotenv import load_dotenv
+from openai import AsyncAzureOpenAI
+from pydantic import BaseModel, Field, validator
+from app.pyd_models.models import JobPostingData, PersonResponse,PositionResponse,  EducationResponse, SkillResponse,ProjectResponse
+from typing import Optional, List
+from typing import Literal
 
 
 # Set up logging
@@ -23,37 +23,14 @@ load_dotenv()
 
 # Add this after the JobPostingData class
 
-class CVData(BaseModel):
-    person_name: str = Field(default="")
-    current_role: str = Field(default="")
-    years_experience: int = Field(default=0)
-    summary: str = Field(default="")
-    skills: List[dict] = Field(default_factory=list)  # List of {name, level, years_experience, last_used}
-    positions: List[dict] = Field(default_factory=list)  # List of position details
-    education: List[dict] = Field(default_factory=list)  # List of education details
-    projects: List[dict] = Field(default_factory=list)  # List of project details
-    
-    @validator('years_experience')
-    def validate_experience(cls, v):
-        return max(0, v)  # Ensure non-negative
 
-
-class JobPostingData(BaseModel):
-    job_title: str = Field(default="")
-    degree_requirement: str = Field(default="Any")
-    field_of_study: str = Field(default="")
-    experience_years: int = Field(default=0)
-    required_skills: str = Field(default="")
-    location_remote: str = Field(default="")
-    industry_sector: str = Field(default="")
-    role_level: str = Field(default="")
     
     @validator('degree_requirement')
     def validate_degree(cls, v):
-        valid_degrees = ["Any", "Bachelor's", "Master's", "PhD"]
+        valid_degrees = ["Any", "Bachelor", "Master", "PhD"]
         return v if v in valid_degrees else "Any"
     
-    @validator('experience_years')
+    @validator('total_years_experience')
     def validate_experience(cls, v):
         return max(0, v)  # Ensure non-negative
 
@@ -73,105 +50,69 @@ class DataExtractionService:
 
     def _initialize_prompt_templates(self):
         """Initialize prompt templates for entity extraction"""
-        self.person_prompt_tpl = """From the Resume text for a job aspirant below, extract Entities strictly as instructed below
-1. First, look for the Person Entity type in the text and extract the needed information defined below:
-   `id` property of each entity must be alphanumeric and must be unique among the entities. You will be referring this property to define the relationship between entities. NEVER create new entity types that aren't mentioned below. Document must be summarized and stored inside Person entity under `description` property
-    Entity Types:
-    label:'Person',id:string,role:string,description:string,cv_file_name:string //Person Node
-2. Description property should be a crisp text summary and MUST NOT be more than 100 characters
-3. If you cannot find any information on the entities & relationships above, it is okay to return empty value. DO NOT create fictitious data
-4. Do NOT create duplicate entities
-5. Restrict yourself to extract only Person information. No Position, Company, Education or Skill information should be focused.
-6. NEVER Impute missing values
-7. Set the cv_file_name property to "$cv_filename"
-8. Extract the full name of the applicant for person_name attribute
-Example Output JSON:
-{"entities": [{"label":"Person","id":"person1","role":"Prompt Developer","description":"Prompt Developer with more than 30 years of LLM experience","cv_file_name":"example_cv.pdf","person_name":"John Doe"}]}
+        self.candidate_prompt_tpl = """From the Resume text below, extract person information with consistent formatting.
+                
+        1. Extract the following information about the candidate:
+           Required fields:
+           name:string,current_role:string,description:string,last_field_of_study:string
+           
+        2. IMPORTANT: Convert all text values to lowercase (name, role, etc.)
+        3. For the description field, summarize the candidate's background and specialization in 1-2 sentences (max 100 characters)
+        4. Extract the candidate's full name and current professional role/title
+        5. For last_field_of_study, determine the highest level of education completed using ONLY one of these values: "bachelor", "master", "phd", or "any" (if unclear)
+        6. DO NOT include other education details, position, or skill information - those will be extracted separately
+        
+        Example Output Format (note all text is lowercase):
+        {"entities": [
+          {"name":"john smith","current_role":"senior software engineer","description":"backend developer with 7 years experience specializing in python and cloud architecture","last_field_of_study":"master"}
+        ]}
+        
+        Question: Extract person information from the text below -
+        $ctext
+        
+        Return ONLY valid JSON:
+        """
+        self.experience_prompt_tpl = """From the Resume text for a job aspirant below, extract Experience information with consistent formatting.
+        
+        1. Extract Position & Company information from the text:
+           Required fields for each position:
+           job_title:string,company_name:string,experience_in_years:integer,description:string
+        
+        2. IMPORTANT: Convert all text values to lowercase (job_titles, company names, etc.)
+        3. Calculate experience_in_years based on the duration at each position 
+        4. For each position, include a brief description (1-2 sentences) of responsibilities or achievements
+        
+        Example Output Format:
+        {"entities": [
+          {"job_title":"software engineer","company_name":"acme tech","experience_in_years":3,"description":"developed backend apis and optimized database queries"},
+          {"job_title":"junior developer","company_name":"xyz solutions","experience_in_years":2,"description":"maintained legacy codebase and implemented new features"}
+        ]}
+        
+        Question: Extract work experience information from the text below -
+        $ctext
+        
+        Return ONLY valid JSON:
+        """
 
-Question: Now, extract the Person for the text below -
-$ctext
+        self.skills_prompt_tpl = """From the Resume text below, extract skill information with consistent formatting.
+        
+        1. Look for all professional skills in the text:
+            Required fields for each skill:
+            name:string,years_experience:integer,last_used:string,category:string
+        2. IMPORTANT: Convert ALL text values to lowercase (skill names, categories, etc.)
+        3. If years_experience cannot be determined, default to 1
+        Example Output Format (note all text is lowercase):
+        {"entities": [
+          {"name":"python","years_experience":6,"last_used":"2023"},
+          {"name":"project management","years_experience":3,"last_used":"2022"}
+        ]}
+        
+        Question: Extract skill information from the text below -
+        $ctext
+        
+        Return ONLY valid JSON:
+        """
 
-Answer:
-"""
-
-        self.position_prompt_tpl = """From the Resume text for a job aspirant below, extract Entities & relationships strictly as instructed below
-1. First, look for Position & Company types in the text and extract information in comma-separated format. Position Entity denotes the Person's previous or current job. Company node is the Company where they held that position.
-   `id` property of each entity must be alphanumeric and must be unique among the entities. You will be referring this property to define the relationship between entities. NEVER create new entity types that aren't mentioned below. You will have to generate as many entities as needed as per the types below:
-    Entity Types:
-    label:'Position',id:string,title:string,location:string,startDate:string,endDate:string,url:string,years_of_experience:integer //Position Node
-    label:'Company',id:string,name:string //Company Node
-2. Next generate each relationships as triples of head, relationship and tail. To refer the head and tail entity, use their respective `id` property. NEVER create new Relationship types that aren't mentioned below:
-    Relationship definition:
-    position|AT_COMPANY|company //Ensure this is a string in the generated output
-3. If you cannot find any information on the entities & relationships above, it is okay to return empty value. DO NOT create fictitious data
-4. Do NOT create duplicate entities. 
-5. No Education or Skill information should be extracted.
-6. DO NOT MISS out any Position or Company related information
-7. NEVER Impute missing values
-8. Calculate years_of_experience for each position based on startDate and endDate
- Example Output JSON:
-{"entities": [{"label":"Position","id":"position1","title":"Software Engineer","location":"Singapore","startDate":"2021-01-01","endDate":"present","years_of_experience":3},{"label":"Position","id":"position2","title":"Senior Software Engineer","location":"Mars","startDate":"2020-01-01","endDate":"2020-12-31","years_of_experience":1},{"label":"Company","id":"company1","name":"Neo4j Singapore Pte Ltd"},{"label":"Company","id":"company2","name":"Neo4j Mars Inc"}],"relationships": ["position1|AT_COMPANY|company1","position2|AT_COMPANY|company2"]}
-
-Question: Now, extract entities & relationships as mentioned above for the text below -
-$ctext
-
-Answer:
-"""
-
-        self.skill_prompt_tpl = """From the Resume text below, extract Entities strictly as instructed below
-1. Look for prominent Skill Entities in the text. The`id` property of each entity must be alphanumeric and must be unique among the entities. NEVER create new entity types that aren't mentioned below:
-    Entity Definition:
-    label:'Skill',id:string,name:string,level:string,years_experience:integer,last_used:string //Skill Node
-2. NEVER Impute missing values
-3. If you do not find any level information: assume it as `expert` if the experience in that skill is more than 5 years, `intermediate` for 2-5 years and `beginner` otherwise.
-4. Focus especially on technical skills, programming languages, tools, frameworks, and domain knowledge
-5. Try to extract the number of years of experience with each skill and when it was last used
-Example Output Format:
-{"entities": [{"label":"Skill","id":"skill1","name":"Neo4j","level":"expert","years_experience":6,"last_used":"2023"},{"label":"Skill","id":"skill2","name":"Pytorch","level":"intermediate","years_experience":3,"last_used":"2022"}]}
-
-Question: Now, extract entities as mentioned above for the text below -
-$ctext
-
-Answer:
-"""
-
-        self.edu_prompt_tpl = """From the Resume text for a job aspirant below, extract Entities strictly as instructed below
-1. Look for Education entity type and generate the information defined below:
-   `id` property of each entity must be alphanumeric and must be unique among the entities. You will be referring this property to define the relationship between entities. NEVER create other entity types that aren't mentioned below. You will have to generate as many entities as needed as per the types below:
-    Entity Definition:
-    label:'Education',id:string,degree:string,university:string,graduationDate:string,score:string,url:string,field_of_study:string //Education Node
-2. If you cannot find any information on the entities above, it is okay to return empty value. DO NOT create fictitious data
-3. Do NOT create duplicate entities or properties
-4. Strictly extract only Education. No Skill or other Entities should be extracted
-5. DO NOT MISS out any Education related entity
-6. NEVER Impute missing values
-7. Make sure to extract the field_of_study separately from the degree when possible
-Output JSON (Strict):
-{"entities": [{"label":"Education","id":"education1","degree":"Bachelor of Science","graduationDate":"May 2022","score":"0.0","field_of_study":"Computer Science"}]}
-
-Question: Now, extract Education information as mentioned above for the text below -
-$ctext
-
-Answer:
-
-"""
-        self.project_prompt_tpl = """From the Resume text for a job aspirant, extract Project information:
-    Entity Definition:
-    label:'Project',id:string,name:string,description:string,technologies:string,start_date:string,end_date:string,outcomes:string,url:string //Project Node
-
-1. Look for significant projects mentioned in the resume
-2. Extract measurable outcomes where available
-3. List technologies used as comma-separated values
-4. Create relationships between projects and skills
-
-Output Format:
-{"entities": [{"label":"Project","id":"project1","name":"Database Migration","description":"Migrated legacy database to cloud","technologies":"PostgreSQL,AWS,Python","outcomes":"Reduced costs by 30%, improved query speed by 50%"}]}
-
-Question: Now, extract Project information from the text below -
-$ctext
-
-Answer:
-"""
 
     def clean_text(self, text):
         """Clean text to remove non-ASCII characters"""
@@ -193,19 +134,11 @@ Answer:
         Returns:
             Validated Pydantic model or dict with entities
         """
-        try:
-            # Replace $cv_filename placeholder if present in the prompt
-            if cv_filename and '$cv_filename' in prompt:
-                prompt = prompt.replace('$cv_filename', cv_filename)
-                
+        try:          
             # Prepare the prompt with CV text
             _prompt = Template(prompt).substitute(ctext=self.clean_text(cv_text))
             
-            # Add JSON instruction if using response_format
             messages_content = _prompt
-            if response_model:
-                if "json" not in _prompt.lower():
-                    messages_content = _prompt + "\n\nProvide the answer in JSON format."
             
             # Call Azure OpenAI
             response = await self.client.chat.completions.create(
@@ -404,116 +337,33 @@ Answer:
         try:
             # Extract all entities with proper model validation
             person_data = await self.extract_entities(
-                self.person_prompt_tpl, 
-                cv_text, 
-                cv_filename, 
+                self.candidate_prompt_tpl,  # Updated from self.person_prompt_tpl
+                cv_text,
+                None, 
                 PersonResponse
             )
             
-            position_data = await self.extract_entities(
-                self.position_prompt_tpl, 
+            experience_data = await self.extract_entities(
+                self.experience_prompt_tpl,  # This is what you defined
                 cv_text, 
                 None, 
                 PositionResponse
             )
+
             
-            education_data = await self.extract_entities(
-                self.edu_prompt_tpl, 
-                cv_text, 
-                None, 
-                EducationResponse
-            )
+            
             
             skill_data = await self.extract_entities(
-                self.skill_prompt_tpl, 
+                self.skills_prompt_tpl,  # This is what you defined
                 cv_text, 
                 None, 
                 SkillResponse
             )
             
-            project_data = await self.extract_entities(
-                self.project_prompt_tpl, 
-                cv_text, 
-                None, 
-                ProjectResponse
-            )
-            
-            # Process person data
-            person_name = ""
-            current_role = ""
-            summary = ""
-            
-            if hasattr(person_data, 'entities') and person_data.entities:
-                person_entity = person_data.entities[0]
-                person_name = person_entity.id.replace("person", "").strip()
-                current_role = person_entity.role
-                summary = person_entity.description
-            
-            # Process position data to calculate total experience
-            positions = []
-            total_years = 0
-            
-            if hasattr(position_data, 'entities'):
-                for entity in position_data.entities:
-                    if hasattr(entity, 'label') and entity.label == 'Position':
-                        years = entity.years_experience
-                        total_years += years
-                        
-                        positions.append({
-                            'title': entity.title,
-                            'location': entity.location,
-                            'start_date': entity.startDate,
-                            'end_date': entity.endDate,
-                            'years_experience': years
-                        })
-            
-            # Process skills
-            skills = []
-            if hasattr(skill_data, 'entities'):
-                for entity in skill_data.entities:
-                    skills.append({
-                        'name': entity.name,
-                        'level': entity.level,
-                        'years_experience': entity.years_experience,
-                        'last_used': entity.last_used
-                    })
-            
-            # Process education
-            education = []
-            if hasattr(education_data, 'entities'):
-                for entity in education_data.entities:
-                    education.append({
-                        'degree': entity.degree,
-                        'university': entity.university,
-                        'graduation_date': entity.graduationDate,
-                        'field_of_study': entity.field_of_study
-                    })
-            
-            # Process projects
-            projects = []
-            if hasattr(project_data, 'entities'):
-                for entity in project_data.entities:
-                    projects.append({
-                        'name': entity.name,
-                        'description': entity.description,
-                        'technologies': entity.technologies.split(',') if entity.technologies else [],
-                        'outcomes': entity.outcomes
-                    })
-            
-            # Create and return CVData object
-            cv_data = CVData(
-                person_name=person_name,
-                current_role=current_role,
-                years_experience=int(total_years),
-                summary=summary,
-                skills=skills,
-                positions=positions,
-                education=education,
-                projects=projects
-            )
+           
             
             return cv_data
             
         except Exception as e:
             logger.error(f"Error extracting CV data: {e}")
-            return CVData()  # Return empty object on error
+            return CVData(cv_file_addess=cv_filename or "") 

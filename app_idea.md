@@ -12,16 +12,18 @@ This combination allows you to filter candidates who meet basic job requirements
 First, design the Neo4j graph to represent the key entities and their relationships:
 
 ### Nodes
-- **Candidate**: Represents a job candidate.
-- **JobPosting**: Represents a job listing.
-- **Skill**: Represents a specific skill (e.g., "Python," "Project Management").
-- **Experience**: Represents a candidate's work experience (optional, with properties like years or company).
+- **Candidate**: Represents a job candidate. Properties: name, job title, description, cv_text. cv_embedding, last_field_of_study,cv_file_address
+- **JobPosting**: Represents a job listing. Properties: title, description, posting_text, posting_embedding.
+- **Skill**: Represents a specific skill (e.g., "python," "project management").
+- **Experience**: Represents a candidate's work experience . Properties: job_title
+
+
 
 ### Relationships
-- **Candidate -[:HAS_SKILL]-> Skill**: Connects a candidate to their skills.
+- **Candidate -[:HAS_SKILL]-> Skill**: Connects a candidate to their skills. (e.g., "5")
 - **JobPosting -[:REQUIRES_SKILL]-> Skill**: Connects a job to its required skills.
-- **Candidate -[:HAS_EXPERIENCE]-> Experience**: Links a candidate to their experience.
-- **JobPosting -[:REQUIRES_EXPERIENCE]-> ExperienceLevel**: Specifies the experience level a job requires (e.g., "5+ years").
+- **Candidate -[:HAS_EXPERIENCE]-> Experience**: Links a candidate to their experience.Properties: experience_in_years,company_name
+- **JobPosting -[:REQUIRES_EXPERIENCE]-> ExperienceLevel**: Specifies the experience level a job requires. Properties: experience_in_years (e.g., "5").
 
 ### Purpose
 These nodes and relationships allow you to filter candidates who meet the job's hard requirements using graph queries. For example, you can find candidates with specific skills or experience levels.
