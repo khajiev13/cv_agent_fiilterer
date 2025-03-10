@@ -9,9 +9,10 @@ from services.neo4j_service import Neo4jService
 from services.background_processor import CVProcessorService
 import threading
 
+default_workers = min(32, os.cpu_count() * 3)  
 
-# Create a global processor service
-cv_processor = CVProcessorService()
+# Create a global processor service with desired number of workers
+cv_processor = CVProcessorService(max_workers=default_workers)  
 
 # Function to run background processing in a separate thread
 def start_background_processing():
@@ -19,11 +20,38 @@ def start_background_processing():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(cv_processor.start_background_processing())
     loop.close()
+
+def stop_background_processing():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(cv_processor.stop_background_processing())
+    loop.close()
+
 def show_upload_cv(neo4j_service:Neo4jService):
     st.header("📤 Upload CVs", divider="rainbow")
     
+    # Display processing status
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        st.metric("Queue Size", cv_processor.get_queue_size())
+    with col2:
+        st.metric("Processing Active", "Yes" if cv_processor.is_processing else "No")
+    with col3:
+        if cv_processor.is_processing:
+            if st.button("⏹️ Stop Processing", use_container_width=True):
+                stop_background_processing()
+                st.success("Processing stopped!")
+                st.rerun()
+        else:
+            if st.button("▶️ Start Processing", use_container_width=True):
+                thread = threading.Thread(target=start_background_processing)
+                thread.daemon = True
+                thread.start()
+                st.success("Processing started!")
+                time.sleep(0.5)  # Brief pause to let thread initialize
+                st.rerun()
+    
     with st.container():
-        
         uploaded_files = st.file_uploader(
             "Choose CV files", 
             accept_multiple_files=True, 
@@ -61,31 +89,31 @@ def show_upload_cv(neo4j_service:Neo4jService):
                     # Save the file with unique filename
                     file_name, file_path = save_uploaded_file(uploaded_file, unique_file_name)
                     
-                    # Create Neo4j CV node with extracted=false
-                    success = neo4j_service.insert_cv_node(file_name=file_name)
-                    
-                    if success:
-                        success_count += 1
+                    #Pass the file name and content to background processor
+                    cv_processor.add_cv_to_queue(file_name, unique_file_name, file_path)
+                    success_count += 1
                     
                     # Update progress
                     progress = (i + 1) / total_files
                     progress_bar.progress(progress)
-                    time.sleep(0.2)  # Small delay for visual feedback
+                    time.sleep(0.1)  # Small delay for visual feedback
 
                 progress_bar.empty()
                 
                 if success_count == total_files:
-                    status.update(label=f"✅ Successfully uploaded {success_count} CV(s)!", state="complete")
+                    status.update(label=f"✅ Added {success_count} CV(s) to processing queue!", state="complete")
                     
-                    # Start background processing in a separate thread
-                    thread = threading.Thread(target=start_background_processing)
-                    thread.daemon = True
-                    thread.start()
+                    # Ensure background processing is running
+                    if not cv_processor.is_processing:
+                        st.info("Starting CV processing in the background.")
+                        thread = threading.Thread(target=start_background_processing)
+                        thread.daemon = True
+                        thread.start()
                     
-                    st.info("CV processing has started in the background.")
+                    st.success(f"CV processing queue: {cv_processor.get_queue_size()} files")
                     st.balloons()
                 else:
-                    status.update(label=f"Uploaded {success_count} of {total_files} CV(s)", state="complete")
+                    status.update(label=f"Queued {success_count} of {total_files} CV(s)", state="complete")
                 
                 # Reset the file uploader after successful upload
                 st.session_state.clear_file_uploader = True

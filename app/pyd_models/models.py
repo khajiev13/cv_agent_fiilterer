@@ -1,6 +1,6 @@
-from typing import List, Optional, Union, Literal
+from typing import Literal
 from pydantic import BaseModel, Field, validator
-
+from typing import List
 
 
 
@@ -11,10 +11,13 @@ class PersonEntity(BaseModel):
     name: str
     job_title: str = ""
     description: str = ""
-    cv_file_address: str = ""
-    cv_text: str = ""
     last_field_of_study: str = ""
     last_degree: Literal["bachelor", "master", "phd", "any"] = Field(default="any")
+
+
+class PersonEntityWithMetadata(PersonEntity):
+    cv_file_address: str = ""
+    cv_text: str = ""
 
     
 class HasExperienceRelationship(BaseModel):
@@ -31,6 +34,9 @@ class HasExperienceRelationship(BaseModel):
 class ExperienceEntity(HasExperienceRelationship):
     job_title: str = ""
 
+class ResponseExperiences(BaseModel):
+    experience: List[ExperienceEntity] = []
+
 class HasSkillRelationship(BaseModel):
     level: Literal["beginner","intermediate","expert"] = Field(default="beginner")
     years_experience: int = Field(default=0, ge=0)
@@ -44,22 +50,31 @@ class HasSkillRelationship(BaseModel):
 class SkillEntity(HasSkillRelationship):
     name: str = ""
 
+class ResponseSkills(BaseModel):
+    skills: List[SkillEntity] = []
 
 
 
 
-# class EducationEntity(BaseModel):
-#     label: str = "Education"
-#     id: str
-#     institution: str = ""
-#     degree: str = ""
-#     field: str = ""
-#     start_date: str = ""
-#     end_date: str = ""
+class JobPostingData(BaseModel):
+    job_title: str = ""
+    alternative_titles: str= ""
+    degree_requirement: str = "Any"
+    field_of_study: str = ""
+    experience_years: int = 0
+    required_skills: str = ""
+    alternative_skills:str = ""
+    location_remote: str = ""
+    industry_sector: str = ""
+    role_level: str = ""
+    
+    @validator('degree_requirement')
+    def validate_degree(cls, v):
+        valid_degrees = ["any", "bachelor", "master", "phd"]
+        return v if v in valid_degrees else "Any"
+    
+    @validator('experience_years')
+    def validate_experience(cls, v):
+        return max(0, v)  # Ensure non-negative
 
-class JobPostingEntity(BaseModel):
-    label: str = "JobPosting"
-    id: str
-    title: str = ""
-    description: str = ""
-    posting_text: str = ""
+
