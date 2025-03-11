@@ -35,11 +35,11 @@ class DataExtractionService:
         )
         
         # Initialize the structured output models
-        self.person_model = self.langchain_model.with_structured_output(PersonEntity)
-        self.position_model = self.langchain_model.with_structured_output(ResponseExperiences)
-        self.skill_model = self.langchain_model.with_structured_output(ResponseSkills)
-        self.job_posting_model = self.langchain_model.with_structured_output(JobPostingData)
-        
+        self.person_model = self.langchain_model.with_structured_output(PersonEntity, method="function_calling")
+        self.position_model = self.langchain_model.with_structured_output(ResponseExperiences, method="function_calling")
+        self.skill_model = self.langchain_model.with_structured_output(ResponseSkills, method="function_calling")
+        self.job_posting_model = self.langchain_model.with_structured_output(JobPostingData, method="function_calling")
+    
         # Define prompt templates for different entity types
         self._initialize_prompt_templates()
 
@@ -66,9 +66,9 @@ class DataExtractionService:
         """
         
         self.experience_prompt_tpl = """From the Resume text below, extract ALL work experience information with consistent formatting.
-        
         For EACH position, extract the following fields exactly:
         - job_title: The position title (lowercase)
+        - alternative_job_titles: Comma-separated list of similar job titles that would qualify (lowercase, e.g., "software developer, software engineer, programmer")
         - company_name: Name of the employer/company (lowercase)
         - experience_in_years: Number of years in this position as an INTEGER (must be non-negative)
         - description: Brief summary of responsibilities or achievements (1-2 sentences, lowercase)
@@ -79,6 +79,7 @@ class DataExtractionService:
         3. Calculate experience_in_years based on start/end dates (round to nearest year)
         4. If exact dates aren't available, provide your best estimate
         5. experience_in_years MUST be a non-negative integer (0 if unclear)
+        6. For alternative_job_titles, provide at least 3 related job titles that use similar skills
         
         Resume text:
         $ctext
@@ -88,6 +89,7 @@ class DataExtractionService:
         
         For EACH skill, extract the following fields exactly:
         - name: The specific skill (lowercase)
+        - alternative_names: Comma-separated list of related skills, variations, or technologies (lowercase, e.g., "react.js, reactjs, react native")
         - level: MUST be EXACTLY one of: "beginner", "intermediate", or "expert"
         - years_experience: Number of years using this skill as an INTEGER (must be non-negative)
         
@@ -97,8 +99,9 @@ class DataExtractionService:
         3. Infer the skill level from context (defaulting to "beginner" if unclear)
         4. If years_experience cannot be determined, use 1
         5. years_experience MUST be a non-negative integer
-        6. Skills must be only one. No values allowed such as project management and marketing. It should be 2 seperate skills in the list for keyword matching with jobs.
-
+        6. Skills must be single distinct concepts - no compound skills (split "project management" into "project" and "management")
+        7. For alternative_names, include abbreviations, variations, and closely related technologies
+        8. Each skill should have at least 2-3 alternative names for better matching
         
         Resume text:
         $ctext
@@ -193,33 +196,40 @@ class DataExtractionService:
                 cv_text,
                 self.person_model
             )
-            
+
+            logger.info(f"Person data: {person_data}")
+            logger.info(f"Person data type: {type(person_data)}")
+            logger.info(f"Person data attributes: {dir(person_data)}")            
             experience_data = await self.extract_entities(
                 self.experience_prompt_tpl,
                 cv_text, 
                 self.position_model
             )
+            logger.info(f"Experience data: {experience_data}")
             
             skill_data = await self.extract_entities(
                 self.skills_prompt_tpl,
                 cv_text, 
                 self.skill_model
             )
+            logger.info(f"Skill data: {skill_data}")
             
             
             extracted_data = {
-                "person": PersonEntityWithMetadata(person_data, cv_text=cv_text,cv_file_address=cv_filename),
+                "person": PersonEntityWithMetadata(**person_data.dict(), cv_text=cv_text, cv_file_address=cv_filename),
                 "experiences": experience_data,
                 "skills": skill_data,
                 "cv_file_address": cv_filename or ""
             }
             logger.info("Extracted data: %s", extracted_data)
+
+            return extracted_data
             
         except Exception as e:
             logger.error(f"Error extracting CV data: {e}")
             return {
-                "person": PersonEntity(),
-                "experience": [],
+                "person": PersonEntity(id="unknown", name="unknown", job_title="", description="", last_field_of_study="", last_degree="any"),
+                "experiences": [],
                 "skills": [],
                 "cv_file_address": cv_filename or ""
             }

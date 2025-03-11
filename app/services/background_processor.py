@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 class CVProcessorService:
 
-    data_extraction_service: DataExtractionService
-    neo4j_service: Neo4jService
+    data_extraction_service: DataExtractionService #To extract the data
+    neo4j_service: Neo4jService # To insert extracted data into the database.
 
     """Service to process CVs in the background using a thread pool and queue system"""
     
@@ -145,28 +145,29 @@ class CVProcessorService:
                 
             # Extract structured data from CV
             cv_data = await self.data_extraction_service.extract_cv_data(cv_text, cv_filename)
+            logger.info(f"The extraction is successfule. Data: {cv_data}")
             
-            # Store data in Neo4j database
-            if cv_data and isinstance(cv_data, dict) and cv_data.get("person"):
-                # Store person data
-                person = cv_data.get("person")
-                person_id = await self.neo4j_service.create_person_node(person)
+            # # Store data in Neo4j database
+            # if cv_data and isinstance(cv_data, dict) and cv_data.get("person"):
+            #     # Store person data
+            #     person = cv_data.get("person")
+            #     person_id = await self.neo4j_service.create_person_node(person)
                 
-                # Store experiences
-                if cv_data.get("experiences") and cv_data["experiences"].experiences:
-                    for exp in cv_data["experiences"].experiences:
-                        await self.neo4j_service.create_experience_relationship(person_id, exp)
+            #     # Store experiences
+            #     if cv_data.get("experiences") and cv_data["experiences"].experiences:
+            #         for exp in cv_data["experiences"].experiences:
+            #             await self.neo4j_service.create_experience_relationship(person_id, exp)
                 
-                # Store skills
-                if cv_data.get("skills") and cv_data["skills"].skills:
-                    for skill in cv_data["skills"].skills:
-                        await self.neo4j_service.create_skill_relationship(person_id, skill)
+            #     # Store skills
+            #     if cv_data.get("skills") and cv_data["skills"].skills:
+            #         for skill in cv_data["skills"].skills:
+            #             await self.neo4j_service.create_skill_relationship(person_id, skill)
                 
-                logger.info(f"Successfully processed and stored CV: {display_name}")
-                return True
-            else:
-                logger.error(f"Failed to extract data from CV: {display_name}")
-                return False
+            #     logger.info(f"Successfully processed and stored CV: {display_name}")
+            #     return True
+            # else:
+            #     logger.error(f"Failed to extract data from CV: {display_name}")
+            #     return False
                 
         except Exception as e:
             logger.error(f"Error processing CV {display_name}: {e}", exc_info=True)

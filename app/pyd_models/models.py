@@ -1,14 +1,14 @@
 from typing import Literal
 from pydantic import BaseModel, Field, validator
-from typing import List
+from typing import List, Optional
 
 
 
 
 class PersonEntity(BaseModel):
     label: str = "Person"
-    id: str
-    name: str
+    id: Optional[str]
+    name: Optional[str]
     job_title: str = ""
     description: str = ""
     last_field_of_study: str = ""
@@ -33,6 +33,8 @@ class HasExperienceRelationship(BaseModel):
 
 class ExperienceEntity(HasExperienceRelationship):
     job_title: str = ""
+    alternative_job_titles: Optional[str] = None
+
 
 class ResponseExperiences(BaseModel):
     experience: List[ExperienceEntity] = []
@@ -49,6 +51,8 @@ class HasSkillRelationship(BaseModel):
 
 class SkillEntity(HasSkillRelationship):
     name: str = ""
+    alternative_names: Optional[str] = None
+
 
 class ResponseSkills(BaseModel):
     skills: List[SkillEntity] = []
