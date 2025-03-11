@@ -62,12 +62,12 @@ class ResponseSkills(BaseModel):
 
 class JobPostingData(BaseModel):
     job_title: str = ""
-    alternative_titles: str= ""
+    alternative_titles: Optional[str] = None
     degree_requirement: str = "Any"
     field_of_study: str = ""
     experience_years: int = 0
     required_skills: str = ""
-    alternative_skills:str = ""
+    alternative_skills:Optional[str] = None
     location_remote: str = ""
     industry_sector: str = ""
     role_level: str = ""
