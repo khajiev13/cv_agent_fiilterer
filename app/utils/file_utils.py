@@ -107,3 +107,34 @@ async def read_cv_text(file_path: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"Error reading CV file {file_path}: {e}")
         return None
+    
+
+async def extract_text_from_uploaded_file(uploaded_file) -> Optional[str]:
+    """
+    Extract text from a file uploaded through Streamlit
+    
+    Args:
+        uploaded_file: Streamlit UploadedFile object
+        
+    Returns:
+        str: Extracted text content, or None if extraction failed
+    """
+    try:
+        # Create a temporary file to process with LangChain loaders
+        temp_path = os.path.join(CV_DATA_DIR, f"temp_{uuid.uuid4()}{Path(uploaded_file.name).suffix}")
+        
+        # Write the uploaded file to a temporary location
+        with open(temp_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        # Use the existing read_cv_text function to extract text
+        text_content = await read_cv_text(temp_path)
+        
+        # Clean up the temporary file
+        os.remove(temp_path)
+        
+        return text_content
+            
+    except Exception as e:
+        logger.error(f"Error extracting text from uploaded file {uploaded_file.name}: {e}")
+        return None

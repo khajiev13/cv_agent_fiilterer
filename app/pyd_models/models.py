@@ -58,27 +58,48 @@ class ResponseSkills(BaseModel):
     skills: List[SkillEntity] = []
 
 
+class SkillRequirement(BaseModel):
+    name: str
+    importance: Literal["required", "preferred", "nice-to-have"] = "required"
+    alternative_names: str = ""  # Comma-separated alternatives
+    minimum_years: int = 0
+    
+    @validator('minimum_years')
+    def check_minimum_years(cls, v):
+        return max(0, v)  # Ensure non-negative
 
+class FieldOfStudy(BaseModel):
+    name: str
+    alternative_fields: str = ""  # Comma-separated alternatives
+    importance: Literal["required", "preferred", "nice-to-have"] = "required"
 
 class JobPostingData(BaseModel):
     job_title: str = ""
-    alternative_titles: Optional[str] = None
-    degree_requirement: str = "Any"
-    field_of_study: str = ""
-    experience_years: int = 0
-    required_skills: str = ""
-    alternative_skills:Optional[str] = None
-    location_remote: str = ""
+    alternative_titles: str = ""  # Store as comma-separated values
+    
+    # Education requirements
+    degree_requirement: str = "any"
+    fields_of_study: List[FieldOfStudy] = []
+    
+    # Experience
+    total_experience_years: int = 0
+    
+    # Skills - now more structured
+    required_skills: List[SkillRequirement] = []
+    
+    # Location and other info
+    location: str = ""
+    remote_option: bool = False
     industry_sector: str = ""
     role_level: str = ""
+    keywords: str = ""  # Additional keywords for matching
     
     @validator('degree_requirement')
     def validate_degree(cls, v):
         valid_degrees = ["any", "bachelor", "master", "phd"]
-        return v if v in valid_degrees else "Any"
+        return v.lower() if v.lower() in valid_degrees else "any"
     
-    @validator('experience_years')
+    @validator('total_experience_years')
     def validate_experience(cls, v):
         return max(0, v)  # Ensure non-negative
-
 

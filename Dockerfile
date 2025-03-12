@@ -5,6 +5,11 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
+#RUN install essentials
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    build-essential 
+
 # Install Python dependencies with prefer-binary to avoid compilation
 RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 

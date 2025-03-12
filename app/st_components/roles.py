@@ -1,13 +1,10 @@
-from app.services.neo4j_service import Neo4jService
-from services.data_extraction_service import DataExtractionService
+import asyncio
+import uuid
+import time
 import streamlit as st
 import pandas as pd
-import time
-import uuid
-import asyncio
-import io
-
-
+from app.services.data_extraction_service import DataExtractionService
+from app.utils.file_utils import extract_text_from_uploaded_file
 
 
 def show_roles(neo4j_service=None):
@@ -36,437 +33,409 @@ def show_roles(neo4j_service=None):
     
     if 'delete_role_id' not in st.session_state:
         st.session_state.delete_role_id = None
+        
+    if 'fields_of_study' not in st.session_state:
+        st.session_state.fields_of_study = [{"name": "", "alternative_fields": "", "importance": "required"}]
+        
+    if 'required_skills' not in st.session_state:
+        st.session_state.required_skills = [{"name": "", "alternative_names": "", "importance": "required", "minimum_years": 0}]
     
     # Create tabs for different views
     tab1, tab2 = st.tabs(["View Roles", "Add Role"])
     
+    # Tab 1: View Roles
     with tab1:
-        # Display existing roles
-        st.subheader("Existing Roles")
-        
-        # Get all roles from Neo4j
-        with st.spinner("Loading roles..."):
-            roles = neo4j_service.get_all_roles()
-        
-        if not roles:
-            st.info("No roles have been added yet.")
-            
-            # Add a helper message
-            st.markdown("""
-            <div style="text-align: center; padding: 20px; margin: 20px 0; border-radius: 10px;">
-                <h3>No Roles Found</h3>
-                <p>Add your first job role to start matching candidates</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-        else:
-            # Convert to DataFrame for display
-            df = pd.DataFrame(roles)
-            df = df[['id', 'job_title', 'degree_requirement', 'experience_years', 'required_skills', 'location_remote']]
-            df.columns = ['ID', 'Job Title', 'Degree', 'Experience (years)', 'Skills', 'Location']
-            
-            # Add search functionality
-            search_query = st.text_input("🔍 Search roles", placeholder="Enter job title or skills")
-            
-            if search_query:
-                filtered_df = df[
-                    df['Job Title'].str.contains(search_query, case=False) | 
-                    df['Skills'].str.contains(search_query, case=False)
-                ]
-                st.caption(f"Found {len(filtered_df)} matching roles")
-                display_df = filtered_df
-            else:
-                display_df = df
-            
-            # Display roles as a data editor without selection_mode
-            edited_df = st.data_editor(
-                display_df,
-                hide_index=True,
-                column_config={
-                    "ID": st.column_config.TextColumn("ID", help="Role identifier"),
-                    "Job Title": st.column_config.TextColumn("Job Title", help="Title of the job role"),
-                    "Degree": st.column_config.TextColumn("Degree", help="Required education level"),
-                    "Experience (years)": st.column_config.NumberColumn("Experience (years)", help="Required years of experience"),
-                    "Skills": st.column_config.TextColumn("Skills", help="Required skills for the role", width="large"),
-                    "Location": st.column_config.TextColumn("Location", help="Job location or remote policy")
-                },
-                use_container_width=True,
-                disabled=df.columns.tolist(),
-                key="roles_table"
-            )
-            
-            # Add a selectbox for role selection instead of using data_editor selection
-            if len(display_df) > 0:
-                st.write("---")
-                st.subheader("Select a role to manage")
-                
-                # Create options for the selectbox with descriptive labels
-                role_options = display_df['ID'].tolist()
-                role_labels = {row['ID']: f"{row['Job Title']} (ID: {row['ID']})" for _, row in display_df.iterrows()}
-                
-                selected_role_id = st.selectbox(
-                    "Choose a role:",
-                    options=role_options,
-                    format_func=lambda x: role_labels[x]
-                )
-                
-                # Get the selected role data
-                if selected_role_id:
-                    selected_role = display_df[display_df['ID'] == selected_role_id].iloc[0].to_dict()
-                    role_id = selected_role['ID']
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("✏️ Edit Role", use_container_width=True):
-                            st.session_state.edit_role_id = role_id
-                            st.rerun()
-                    
-                    with col2:
-                        if st.button("🗑️ Delete Role", use_container_width=True):
-                            st.session_state.delete_role_id = role_id
-                            st.rerun()
-                    
-                    # Handle delete confirmation
-                    if st.session_state.delete_role_id == role_id:
-                        st.warning("⚠️ Are you sure you want to delete this role?")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.button("✅ Yes, Delete", key="confirm_delete", use_container_width=True):
-                                with st.spinner("Deleting role..."):
-                                    success = neo4j_service.delete_role(role_id)
-                                    if success:
-                                        st.session_state.delete_role_id = None
-                                        st.toast("Role deleted successfully!")
-                                        time.sleep(1)
-                                        st.rerun()
-                                    else:
-                                        st.error("Failed to delete the role")
-                        
-                        with col2:
-                            if st.button("❌ Cancel", key="cancel_delete", use_container_width=True):
-                                st.session_state.delete_role_id = None
-                                st.rerun()
-                    
-                    # Handle edit form
-                    if st.session_state.edit_role_id == role_id:
-                        # Get current role data
-                        current_role = next((r for r in roles if r['id'] == role_id), None)
-                        if current_role:
-                            st.subheader("Edit Role")
-                            with st.form(key="edit_role_form"):
-                                job_title = st.text_input(
-                                    "Job Title*", 
-                                    value=current_role['job_title']
-                                )
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    degree_requirement = st.selectbox(
-                                        "Degree Requirement", 
-                                        ["Any", "Bachelor's", "Master's", "PhD"],
-                                        index=["Any", "Bachelor's", "Master's", "PhD"].index(current_role['degree_requirement'])
-                                    )
-                                    
-                                    experience_years = st.number_input(
-                                        "Years of Experience", 
-                                        min_value=0, 
-                                        value=int(current_role['experience_years'])
-                                    )
-                                
-                                with col2:
-                                    field_of_study = st.text_input(
-                                        "Field of Study",
-                                        value=current_role['field_of_study']
-                                    )
-                                    
-                                    location_remote = st.text_input(
-                                        "Location/Remote",
-                                        value=current_role['location_remote']
-                                    )
-                                
-                                # Add fields for industry sector and role level
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    industry_sector = st.text_input(
-                                        "Industry Sector",
-                                        value=current_role.get('industry_sector', '')
-                                    )
-                                
-                                with col2:
-                                    role_level = st.text_input(
-                                        "Role Level",
-                                        value=current_role.get('role_level', '')
-                                    )
-                                
-                                # Format skills with importance and required status
-                                skills_formatted = current_role['required_skills']
-                                if 'skills' in current_role and isinstance(current_role['skills'], list):
-                                    skills_formatted = ""
-                                    for i, skill in enumerate(current_role['skills']):
-                                        if skill['name']:  # Only include if name exists
-                                            if i > 0:
-                                                skills_formatted += ", "
-                                            skills_formatted += f"{skill['name']}:{skill.get('importance', 5)}:{str(skill.get('is_required', True)).lower()}"
-                                
-                                st.subheader("Skills")
-                                st.info("For each skill, you can specify importance (1-10) and whether it's required. Format: Skill:importance:required")
-                                st.caption("Example: Python:8:true, SQL:5:false")
-                                
-                                required_skills = st.text_area(
-                                    "Required Skills (formatted)",
-                                    value=skills_formatted
-                                )
-                                
-                                # Visual skill builder for editing
-                                with st.expander("Visual Skill Builder"):
-                                    skill_name = st.text_input("Skill Name", key="edit_form_skill_name")
-                                    skill_importance = st.slider("Importance", 1, 10, 5, key="edit_form_skill_importance")
-                                    skill_required = st.checkbox("Required Skill", True, key="edit_form_skill_required")
-                                    
-                                    add_skill = st.form_submit_button("Add Skill to List")
-                                    if add_skill and skill_name:
-                                        new_skill = f"{skill_name}:{skill_importance}:{str(skill_required).lower()}"
-                                        if required_skills:
-                                            required_skills += f", {new_skill}"
-                                        else:
-                                            required_skills = new_skill
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    submit = st.form_submit_button("💾 Update Role", use_container_width=True)
-                                with col2:
-                                    if st.form_submit_button("❌ Cancel", use_container_width=True):
-                                        st.session_state.edit_role_id = None
-                                        st.rerun()
-                                
-                                if submit:
-                                    if not job_title:
-                                        st.error("Job Title is required")
-                                    else:
-                                        with st.spinner("Updating role..."):
-                                            success = neo4j_service.update_role(
-                                                role_id, job_title, degree_requirement, 
-                                                field_of_study, experience_years, 
-                                                required_skills, location_remote,
-                                                industry_sector, role_level
-                                            )
-                                            if success:
-                                                st.session_state.edit_role_id = None
-                                                st.toast("Role updated successfully!")
-                                                time.sleep(1)
-                                                st.rerun()
-                                            else:
-                                                st.error("Failed to update the role")
+        display_roles_table(neo4j_service)
     
+    # Tab 2: Add Role
     with tab2:
-        # Form to add a new role with improved layout
-        st.subheader("Add New Role")
-        
-        # Add file uploader for job description documents
-        uploaded_file = st.file_uploader(
-            "Upload job description document", 
-            type=["pdf", "docx", "txt","doc"],
-            help="Upload a job description to auto-fill the form"
-        )
-        
-        # Initialize form fields as session state variables if not already present
-        if 'job_form_data' not in st.session_state:
-            st.session_state.job_form_data = {
-                "job_title": "",
-                "degree_requirement": 0,  # Index for selectbox
-                "experience_years": 0,
-                "field_of_study": "",
-                "location_remote": "",
-                "industry_sector": "",
-                "role_level": "",
-                "required_skills": ""
-            }
-        
-        # Process uploaded file if present
-        if uploaded_file:
-            with st.spinner("Extracting information from job description..."):
-                # Read file
-                file_bytes = uploaded_file.read()
-                file_name = uploaded_file.name
-                
-                # Handle different file types
-                # Find the file handling section around line 269
-                # Handle different file types
-                text_content = ""
-                if file_name.lower().endswith('.txt'):
-                    text_content = file_bytes.decode('utf-8')
-                elif file_name.lower().endswith('.pdf'):
-                    # You'll need pdfplumber or PyPDF2 imported at the top
-                    import pdfplumber  # Make sure this is installed
-                    try:
-                        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-                            text_content = "\n".join([page.extract_text() or "" for page in pdf.pages])
-                    except Exception as e:
-                        st.error(f"Error reading PDF: {e}")
-                elif file_name.lower().endswith('.docx'):
-                    # You'll need python-docx imported at the top
-                    import docx  # Make sure this is installed
-                    try:
-                        doc = docx.Document(io.BytesIO(file_bytes))
-                        text_content = "\n".join([para.text for para in doc.paragraphs])
-                    except Exception as e:
-                        st.error(f"Error reading DOCX: {e}")
-                elif file_name.lower().endswith('.doc'):
-                    # Option 1: Using textract (most versatile)
-                    try:
-                        import textract
-                        # Save file temporarily to process with textract
-                        temp_path = f"/tmp/{file_name}"
-                        with open(temp_path, "wb") as f:
-                            f.write(file_bytes)
-                        text_content = textract.process(temp_path).decode('utf-8')
-                        import os
-                        os.remove(temp_path)  # Clean up temp file
-                    except ImportError:
-                        st.error("textract package not installed. Please install it using: pip install textract")
-                    except Exception as e:
-                        st.error(f"Error reading DOC file: {e}")
+        add_role_form(neo4j_service)
 
-                if text_content:
-                    # Extract information using DataExtractionService
-                    extraction_service = DataExtractionService()
-                    if extraction_service:
-                        # Run the extraction asynchronously
-                        extracted_data = asyncio.run(
-                            extraction_service.extract_job_posting_information_for_form(text_content)
-                        )
-                        if extracted_data:
-                            # Update form data in session state - access properties directly, not as a dictionary
-                            st.session_state.job_form_data = {
-                                "job_title": extracted_data.job_title,
-                                "degree_requirement": ["Any", "Bachelor's", "Master's", "PhD"].index(
-                                    extracted_data.degree_requirement
-                                ),
-                                "experience_years": extracted_data.experience_years,
-                                "field_of_study": extracted_data.field_of_study,
-                                "location_remote": extracted_data.location_remote,
-                                "industry_sector": extracted_data.industry_sector,
-                                "role_level": extracted_data.role_level,
-                                "required_skills": extracted_data.required_skills
-                            }
-                            st.success("Form auto-filled from job description! Please review and adjust as needed.")
+
+def display_roles_table(neo4j_service):
+    """Display existing roles in a table with options to edit or delete"""
+    
+    # Get all roles from Neo4j
+    roles = neo4j_service.get_all_roles()
+    
+    if not roles:
+        st.info("No roles found in the database.")
+        return
+    
+    # Convert to DataFrame for better display
+    roles_df = pd.json_normalize(roles)
+    
+    # Select columns for display
+    display_columns = ["id", "job_title", "degree_requirement", "field_of_study", 
+                      "experience_years", "required_skills", "location", 
+                      "remote_option", "role_level"]
+    
+    # Filter columns that exist in the DataFrame
+    display_columns = [col for col in display_columns if col in roles_df.columns]
+    
+    # Create role table with action buttons
+    st.subheader("Existing Roles")
+    
+    with st.container():
+        # Using expanders for each role for a cleaner UI
+        for role in roles:
+            with st.expander(f"📋 {role.get('job_title', 'Untitled Role')}"):
+                # Two-column layout for role details
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"**ID:** {role.get('id', 'N/A')}")
+                    st.markdown(f"**Title:** {role.get('job_title', 'N/A')}")
+                    st.markdown(f"**Degree:** {role.get('degree_requirement', 'Any')}")
+                    st.markdown(f"**Field of Study:** {role.get('field_of_study', 'N/A')}")
+                    st.markdown(f"**Experience:** {role.get('experience_years', 0)} years")
+                    st.markdown(f"**Location:** {role.get('location', 'N/A')}")
+                    st.markdown(f"**Remote:** {'Yes' if role.get('remote_option') == 'true' else 'No'}")
+                    st.markdown(f"**Industry:** {role.get('industry_sector', 'N/A')}")
+                    st.markdown(f"**Level:** {role.get('role_level', 'N/A')}")
+                    
+                    # Skills section
+                    if 'skills' in role and role['skills']:
+                        st.markdown("**Skills:**")
+                        for skill in role['skills']:
+                            if isinstance(skill, dict) and 'name' in skill:
+                                importance = skill.get('importance', 'normal')
+                                emoji = "🔴" if importance == "required" else "🟠" if importance == "preferred" else "🟢"
+                                st.markdown(f"{emoji} {skill['name']}")
+                
+                with col2:
+                    # Action buttons
+                    if st.button("Edit", key=f"edit_{role['id']}"):
+                        st.session_state.edit_role_id = role['id']
+                        # Prepare form with existing data
+                        prepare_edit_form(role)
+                        # Switch to Add Role tab
+                        st.rerun()
+                    
+                    if st.button("Delete", key=f"delete_{role['id']}"):
+                        st.session_state.delete_role_id = role['id']
                         
-                        else:
-                            st.warning("Couldn't extract information from the document. Please fill the form manually.")
+    # Handle role deletion with confirmation
+    if st.session_state.delete_role_id:
+        if st.button(f"Confirm deletion of role {st.session_state.delete_role_id}"):
+            success = neo4j_service.delete_role(st.session_state.delete_role_id)
+            if success:
+                st.success(f"Role {st.session_state.delete_role_id} deleted successfully!")
+                st.session_state.delete_role_id = None
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("Failed to delete role")
+
+
+def prepare_edit_form(role):
+    """Prepare the form for editing with existing role data"""
+    # Extract fields of study
+    fields = []
+    if 'fields_of_study' in role and isinstance(role['fields_of_study'], list):
+        fields = role['fields_of_study']
+    elif 'field_of_study' in role and role['field_of_study']:
+        # Legacy format - convert to new format
+        fields = [{
+            "name": role['field_of_study'],
+            "alternative_fields": "",
+            "importance": "required"
+        }]
+    
+    st.session_state.fields_of_study = fields if fields else [{"name": "", "alternative_fields": "", "importance": "required"}]
+    
+    # Extract required skills
+    skills = []
+    if 'skills' in role and isinstance(role['skills'], list):
+        skills = [
+            {
+                "name": skill.get('name', ''),
+                "alternative_names": "",
+                "importance": skill.get('importance', 'required'),
+                "minimum_years": 0
+            }
+            for skill in role['skills'] if isinstance(skill, dict) and 'name' in skill
+        ]
+    
+    st.session_state.required_skills = skills if skills else [{"name": "", "alternative_names": "", "importance": "required", "minimum_years": 0}]
+    
+    # Set other form fields
+    for key in ['job_title', 'alternative_titles', 'degree_requirement', 'total_experience_years', 
+                'location', 'industry_sector', 'role_level', 'keywords']:
+        if key in role:
+            st.session_state[key] = role[key]
+    
+    # Boolean field handling
+    if 'remote_option' in role:
+        st.session_state.remote_option = role['remote_option'] == 'true' if isinstance(role['remote_option'], str) else bool(role['remote_option'])
+
+
+def add_role_form(neo4j_service):
+    """Form for adding a new role or editing an existing one"""
+    data_extraction_service = DataExtractionService()
+    
+    st.subheader("Role Details")
+    
+    # File uploader for job posting - outside the form
+    st.markdown("#### Upload Job Description (Optional)")
+    st.markdown("_Upload a job posting file to automatically extract role information_")
+    
+    uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "txt"])
+    
+    if uploaded_file:
+        if st.button("Extract Job Data"):
+            with st.spinner("Extracting data from job posting..."):
+                # Extract text from the uploaded file
+                text_content = asyncio.run(extract_text_from_uploaded_file(uploaded_file))
+                
+                if text_content:
+                    # Extract job data from the text
+                    job_data = asyncio.run(data_extraction_service.extract_job_posting_information_for_form(text_content))
+                    
+                    if job_data:
+                        st.success("Data extracted successfully! Form pre-filled with extracted information.")
+                        
+                        # Initialize lists for fields of study and skills
+                        fields_of_study = []
+                        required_skills = []
+                        
+                        # Process fields of study
+                        if hasattr(job_data, 'fields_of_study') and job_data.fields_of_study:
+                            for field in job_data.fields_of_study:
+                                fields_of_study.append({
+                                    "name": field.name,
+                                    "alternative_fields": field.alternative_fields,
+                                    "importance": field.importance
+                                })
+                        
+                        # Process required skills
+                        if hasattr(job_data, 'required_skills') and job_data.required_skills:
+                            for skill in job_data.required_skills:
+                                required_skills.append({
+                                    "name": skill.name,
+                                    "alternative_names": skill.alternative_names,
+                                    "importance": skill.importance,
+                                    "minimum_years": skill.minimum_years
+                                })
+                        
+                        # Update session state with extracted data
+                        st.session_state.job_title = job_data.job_title
+                        st.session_state.alternative_titles = job_data.alternative_titles
+                        st.session_state.degree_requirement = job_data.degree_requirement
+                        st.session_state.fields_of_study = fields_of_study if fields_of_study else [{"name": "", "alternative_fields": "", "importance": "required"}]
+                        st.session_state.total_experience_years = job_data.total_experience_years
+                        st.session_state.required_skills = required_skills if required_skills else [{"name": "", "alternative_names": "", "importance": "required", "minimum_years": 0}]
+                        st.session_state.location = job_data.location
+                        st.session_state.remote_option = job_data.remote_option
+                        st.session_state.industry_sector = job_data.industry_sector
+                        st.session_state.role_level = job_data.role_level
+                        st.session_state.keywords = job_data.keywords
+                        
+                        # Rerun to display updated form
+                        st.rerun()
                     else:
-                        st.error("Extraction service not available. Please initialize the service.")
-        
-        with st.form("add_role_form"):
-            job_title = st.text_input(
-                "Job Title*", 
-                placeholder="e.g. Software Engineer",
-                value=st.session_state.job_form_data.get("job_title", "")
-            )
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                degree_requirement = st.selectbox(
-                    "Degree Requirement", 
-                    ["Any", "Bachelor's", "Master's", "PhD"],
-                    index=st.session_state.job_form_data.get("degree_requirement", 0),
-                    help="Minimum education requirement"
-                )
-                
-                experience_years = st.number_input(
-                    "Years of Experience", 
-                    min_value=0, 
-                    value=st.session_state.job_form_data.get("experience_years", 0),
-                    help="Minimum years of experience required"
-                )
-            
-            with col2:
-                field_of_study = st.text_input(
-                    "Field of Study",
-                    placeholder="e.g. Computer Science, Engineering",
-                    value=st.session_state.job_form_data.get("field_of_study", ""),
-                    help="Comma separated for multiple fields"
-                )
-                
-                location_remote = st.text_input(
-                    "Location/Remote",
-                    placeholder="e.g. New York / Remote",
-                    value=st.session_state.job_form_data.get("location_remote", ""),
-                    help="Job location or remote policy"
-                )
-            
-            # Add new fields for industry sector and role level
-            col1, col2 = st.columns(2)
-            with col1:
-                industry_sector = st.text_input(
-                    "Industry Sector",
-                    placeholder="e.g. Technology, Finance",
-                    value=st.session_state.job_form_data.get("industry_sector", ""),
-                    help="Industry the role belongs to"
-                )
-            
-            with col2:
-                role_level = st.text_input(
-                    "Role Level",
-                    placeholder="e.g. Junior, Senior, Manager",
-                    value=st.session_state.job_form_data.get("role_level", ""),
-                    help="Seniority level of the role"
-                )
-            
-            # Improved skill input section with importance and required flags
-            st.subheader("Skills")
-            st.info("For each skill, you can specify importance (1-10) and whether it's required. Format: Skill:importance:required")
-            st.caption("Example: Python:8:true, SQL:5:false")
-            
-            required_skills = st.text_area(
-                "Required Skills",
-                placeholder="e.g. Python:8:true, SQL:5:false, JavaScript:7:true",
-                value=st.session_state.job_form_data.get("required_skills", ""),
-                help="Format: Skill:importance:required"
-            )
-            
-            # Add a visual skill builder as an alternative
-            with st.expander("Visual Skill Builder"):
-                skill_name = st.text_input("Skill Name", key="add_form_skill_name")
-                skill_importance = st.slider("Importance", 1, 10, 5, key="add_form_skill_importance")
-                skill_required = st.checkbox("Required Skill", True, key="add_form_skill_required")
-                
-                add_skill = st.form_submit_button("Add Skill to List")
-                if add_skill and skill_name:
-                    new_skill = f"{skill_name}:{skill_importance}:{str(skill_required).lower()}"
-                    if required_skills:
-                        required_skills += f", {new_skill}"
-                    else:
-                        required_skills = new_skill
-            
-            # Clear auto-filled data after submission
-            submitted = st.form_submit_button("➕ Add Role", use_container_width=True)
-            
-            if submitted:
-                if not job_title:
-                    st.error("Job Title is required")
+                        st.error("Failed to extract job data. Please fill the form manually.")
                 else:
-                    with st.spinner("Adding role..."):
-                        # Generate a unique ID for the new role
-                        role_id = str(uuid.uuid4())
-                        success = neo4j_service.add_role(
-                            role_id, job_title, degree_requirement, field_of_study,
-                            experience_years, required_skills, location_remote,
-                            industry_sector, role_level
-                        )
-                        if success:
-                            # Clear form data on successful submission
-                            st.session_state.job_form_data = {
-                                "job_title": "",
-                                "degree_requirement": 0,
-                                "experience_years": 0,
-                                "field_of_study": "",
-                                "location_remote": "",
-                                "industry_sector": "",
-                                "role_level": "",
-                                "required_skills": ""
-                            }
-                            st.toast("✅ Role added successfully!")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error("Failed to add the role")
+                    st.error("Failed to extract text from the file. Please try another file or fill the form manually.")
+    
+    # Dynamic controls for Fields of Study - OUTSIDE the form
+    st.subheader("Fields of Study")
+    
+    # Button to add more fields - OUTSIDE form
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("Add Field of Study"):
+            st.session_state.fields_of_study.append({"name": "", "alternative_fields": "", "importance": "required"})
+            st.rerun()
+    
+    # Button to remove fields - OUTSIDE form
+    for i, field in enumerate(st.session_state.fields_of_study):
+        if i > 0:  # Don't allow removing the first field
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                if st.button(f"Remove Field #{i+1}", key=f"remove_field_{i}"):
+                    st.session_state.fields_of_study.pop(i)
+                    st.rerun()
+    
+    # Dynamic controls for Skills - OUTSIDE the form
+    st.subheader("Required Skills")
+    
+    # Button to add more skills - OUTSIDE form
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("Add Skill"):
+            st.session_state.required_skills.append({"name": "", "alternative_names": "", "importance": "required", "minimum_years": 0})
+            st.rerun()
+    
+    # Button to remove skills - OUTSIDE form
+    for i, skill in enumerate(st.session_state.required_skills):
+        if i > 0:  # Don't allow removing the first skill
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                if st.button(f"Remove Skill #{i+1}", key=f"remove_skill_{i}"):
+                    st.session_state.required_skills.pop(i)
+                    st.rerun()
+    
+    # Now create the actual form - with NO buttons inside except submit
+    with st.form("role_form"):
+        # Basic role information
+        job_title = st.text_input("Job Title", key="job_title", 
+                                help="The main title of the position")
+        
+        alternative_titles = st.text_input("Alternative Titles (comma-separated)", key="alternative_titles", 
+                                        help="Similar job titles separated by commas")
+        
+        # Education requirements
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            degree_requirement = st.selectbox("Minimum Degree Requirement", 
+                                            ["any", "bachelor", "master", "phd"],
+                                            key="degree_requirement")
+        with col2:
+            total_experience_years = st.number_input("Experience Required (Years)", 
+                                                  min_value=0, value=0, key="total_experience_years")
+        
+        # Fields of Study - dynamic form inputs (no buttons)
+        st.subheader("Fields of Study Details")
+        
+        # Display field inputs
+        for i, field in enumerate(st.session_state.fields_of_study):
+            st.markdown(f"**Field of Study {i+1}**")
+            col1, col2, col3 = st.columns([2, 2, 1])
+            
+            with col1:
+                st.session_state.fields_of_study[i]["name"] = st.text_input(
+                    "Field Name", value=field["name"], key=f"field_name_{i}")
+            
+            with col2:
+                st.session_state.fields_of_study[i]["alternative_fields"] = st.text_input(
+                    "Alternative Fields", value=field["alternative_fields"], key=f"field_alt_{i}")
+            
+            with col3:
+                importance_options = ["required", "preferred", "nice-to-have"]
+                st.session_state.fields_of_study[i]["importance"] = st.selectbox(
+                    "Importance", importance_options, 
+                    index=importance_options.index(field["importance"]) if field["importance"] in importance_options else 0,
+                    key=f"field_importance_{i}")
+            
+            st.markdown("---")
+        
+        # Skills requirements - dynamic form inputs (no buttons)
+        st.subheader("Skills Details")
+        
+        # Display skill inputs
+        for i, skill in enumerate(st.session_state.required_skills):
+            st.markdown(f"**Skill {i+1}**")
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                st.session_state.required_skills[i]["name"] = st.text_input(
+                    "Skill Name", value=skill["name"], key=f"skill_name_{i}")
+            
+            with col2:
+                st.session_state.required_skills[i]["alternative_names"] = st.text_input(
+                    "Alternative Names", value=skill["alternative_names"], key=f"skill_alt_{i}")
+            
+            col3, col4 = st.columns([1, 1])
+            with col3:
+                importance_options = ["required", "preferred", "nice-to-have"]
+                st.session_state.required_skills[i]["importance"] = st.selectbox(
+                    "Importance", importance_options,
+                    index=importance_options.index(skill["importance"]) if skill["importance"] in importance_options else 0,
+                    key=f"skill_importance_{i}")
+            
+            with col4:
+                st.session_state.required_skills[i]["minimum_years"] = st.number_input(
+                    "Minimum Years", min_value=0, value=skill["minimum_years"], key=f"skill_years_{i}")
+            
+            st.markdown("---")
+        
+        # Location and other info
+        st.subheader("Additional Information")
+        
+        location = st.text_input("Location", key="location", 
+                              help="The physical location of the job")
+        
+        remote_option = st.checkbox("Remote Work Option", key="remote_option",
+                                 help="Check if the role can be performed remotely")
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            industry_sector = st.text_input("Industry Sector", key="industry_sector",
+                                         help="The industry this role belongs to")
+        
+        with col2:
+            role_level = st.text_input("Role Level", key="role_level",
+                                    help="Seniority level (e.g., junior, senior)")
+        
+        keywords = st.text_input("Additional Keywords (comma-separated)", key="keywords",
+                              help="Other relevant keywords for matching candidates")
+        
+        # Submit button - the only button inside the form
+        submit_text = "Update Role" if st.session_state.edit_role_id else "Add Role"
+        submit = st.form_submit_button(submit_text)
+        
+        if submit:
+            # Validate form
+            if not job_title:
+                st.error("Job title is required")
+            else:
+                # Process fields of study - remove empty entries
+                fields_of_study = [f for f in st.session_state.fields_of_study 
+                                 if f["name"].strip()]
+                
+                # Process required skills - remove empty entries
+                required_skills = [s for s in st.session_state.required_skills 
+                                 if s["name"].strip()]
+                
+                # Format required skills for Neo4j service
+                skills_format = []
+                for skill in required_skills:
+                    # Format: "skill_name:importance:is_required"
+                    importance_value = 10 if skill["importance"] == "required" else 5 if skill["importance"] == "preferred" else 2
+                    is_required = skill["importance"] == "required"
+                    skills_format.append(f"{skill['name']}:{importance_value}:{is_required}")
+                
+                skills_string = ",".join(skills_format)
+                
+                # Format field of study for Neo4j service - take first field for now
+                field_of_study = fields_of_study[0]["name"] if fields_of_study else ""
+                
+                # Generate a unique ID if adding a new role
+                role_id = st.session_state.edit_role_id if st.session_state.edit_role_id else f"role_{uuid.uuid4().hex[:8]}"
+                
+                # Save to Neo4j
+                success = neo4j_service.add_role(
+                    role_id=role_id,
+                    job_title=job_title,
+                    alternative_titles=st.session_state.alternative_titles,
+                    degree_requirement=degree_requirement,
+                    fields_of_study=fields_of_study,
+                    total_experience_years=total_experience_years,
+                    required_skills=skills_string,
+                    location=location,
+                    remote_option=remote_option,
+                    industry_sector=industry_sector,
+                    role_level=role_level,
+                    keywords=keywords
+                )
+                if success:
+                    st.success("Role updated successfully!")
+                else:
+                    st.error("Failed to update role")
+
+
+def reset_form_fields():
+    """Reset the form fields to default values"""
+    for key in st.session_state.keys():
+        if key in ['job_title', 'alternative_titles', 'location', 'industry_sector', 'role_level', 'keywords']:
+            st.session_state[key] = ""
+        elif key == 'total_experience_years':
+            st.session_state[key] = 0
+        elif key == 'degree_requirement':
+            st.session_state[key] = "any"
+        elif key == 'remote_option':
+            st.session_state[key] = False
+    
+    st.session_state.fields_of_study = [{"name": "", "alternative_fields": "", "importance": "required"}]
+    st.session_state.required_skills = [{"name": "", "alternative_names": "", "importance": "required", "minimum_years": 0}]

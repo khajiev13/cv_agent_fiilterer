@@ -149,27 +149,52 @@ class DataExtractionService:
             - job_title: The exact title of the position (lowercase)
             - alternative_titles: Comma-separated list of similar job titles that would qualify (lowercase, e.g., "software developer, software engineer, coder")
             - degree_requirement: MUST be EXACTLY one of these values only: "any", "bachelor", "master", "phd"
-            - field_of_study: Required field or major (lowercase, e.g., "computer science", "business")
-            - experience_years: Required minimum experience as a non-negative INTEGER (0 if unspecified)
-            - required_skills: A comma-separated list of INDIVIDUAL skills required (lowercase, e.g., "python, sql, react")
-            - alternative_skills: Comma-separated list of related/equivalent skills that would also qualify (lowercase, e.g., "django for python, mysql for sql, react.js for react")
-            - location_remote: Job location or remote policy (lowercase)
+            
+            # Fields of study as JSON array
+            - fields_of_study: JSON array of objects with structure:
+              [
+                {{"name": "field name (e.g., computer science)", 
+                  "alternative_fields": "related fields (e.g., software engineering, information systems)", 
+                  "importance": "required|preferred|nice-to-have"
+                }},
+                # more fields...
+              ]
+            
+            - total_experience_years: Required minimum experience as a non-negative INTEGER (0 if unspecified)
+            
+            # Required skills as JSON array
+            - required_skills: JSON array of objects with structure:
+              [
+                {{"name": "skill name (e.g., python)", 
+                  "alternative_names": "similar skills/technologies (e.g., python3, py)", 
+                  "importance": "required|preferred|nice-to-have",
+                  "minimum_years": non-negative integer (0 if not specified)
+                }},
+                # more skills...
+              ]
+            
+            - location: Physical job location (e.g., "new york, ny") or "remote" if fully remote
+            - remote_option: "true" if remote work is possible, "false" otherwise
             - industry_sector: Industry the role belongs to (lowercase)
             - role_level: Seniority level (lowercase, e.g., "junior", "senior", "manager")
+            - keywords: Additional relevant keywords for matching, comma-separated
             
             IMPORTANT:
             1. ALL text values MUST be lowercase
-            2. For required_skills and alternative_skills, list EACH skill individually (not combined skills)
-            3. For alternative_skills, include variations, abbreviations, and related technologies for each required skill
-            4. Split compound skills (e.g., "project management" → "project, management")
-            5. Include at least 3 alternative job titles that would be suitable for the same position
+            2. Format JSON arrays exactly as shown with proper syntax
+            3. Include at least 3 alternative job titles
+            4. Include at least 3 required skills
+            5. For each skill and field of study, provide alternative names/fields
             6. Use "any" for degree_requirement ONLY if no specific requirement is mentioned
-            7. Extract experience_years as a single number (the minimum required years)
-            8. If specific years are not mentioned, use context to estimate or default to 0
-            9. Be precise and concise for maximum keyword matching effectiveness
+            7. Include all relevant fields of study, not just one
+            8. Be precise and concise for maximum keyword matching effectiveness
             """
             
             result = await self.job_posting_model.ainvoke(prompt.format(job_posting_text))
+
+            logger.info(f"Job posting data: {result}")
+            
+            # No transformation needed as the JSON structures should map directly
             return result
         
         except Exception as e:

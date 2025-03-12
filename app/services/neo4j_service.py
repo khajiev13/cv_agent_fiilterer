@@ -471,260 +471,225 @@ class Neo4jService:
             logger.error(f"Error getting unextracted CVs: {e}")
             return []
 
-    def add_role(self, role_id, job_title, degree_requirement, field_of_study, 
-                experience_years, required_skills, location_remote,
-                industry_sector="", role_level=""):
+    def add_role(self, role_id, job_title, alternative_titles=None, degree_requirement=None, 
+                 fields_of_study=None, total_experience_years=0, required_skills=None,
+                 location=None, remote_option=None, industry_sector=None, role_level=None,
+                 keywords=None):
         """
-        Add a new role to Neo4j with improved skill representation
+        Add a new role to Neo4j with support for alternative titles and fields
         
+        Args:
+            role_id (str): Unique identifier for the role
+            job_title (str): Title of the job
+            alternative_titles (str): Alternative titles for the job (comma-separated)
+            degree_requirement (str): Required degree level
+            fields_of_study (list): List of field objects with name, alternative_fields and importance
+            total_experience_years (int): Required years of experience
+            required_skills (str): Required skills in format "Skill:importance:required,Skill2:importance:required"
+            location (str): Job location
+            remote_option (bool): Remote work options
+            industry_sector (str): Industry sector
+            role_level (str): Level of the role
+            keywords (str): Keywords related to the role (comma-separated)
+            
         Returns:
-            bool: Success or failure
+            bool: True if added successfully, False otherwise
         """
         if not self.connect():
             logger.warning("Cannot connect to Neo4j to add role")
             return False
         
         try:
-            # Parse required_skills into a structured format with importance
-            # Input format should be: "Skill:importance:required,Skill2:importance:required"
-            # Example: "Python:8:true,SQL:5:false"
-            skill_relationships = []
-            skills_to_process = []
+            # Begin transaction for atomic operation
+            with self.driver.session() as session:
+                session.execute_write(self._create_or_update_role_transaction, 
+                                     role_id, 
+                                     job_title,
+                                     alternative_titles,
+                                     degree_requirement,
+                                     fields_of_study,
+                                     total_experience_years,
+                                     required_skills,
+                                     location,
+                                     remote_option,
+                                     industry_sector,
+                                     role_level,
+                                     keywords)
+                
+            logger.info(f"Role {role_id} added/updated successfully")
+            return True
             
-            if isinstance(required_skills, str) and required_skills:
-                skills_list = [s.strip() for s in required_skills.split(',')]
-                for skill_entry in skills_list:
-                    if ':' in skill_entry:
-                        parts = skill_entry.split(':')
+        except Exception as e:
+            logger.error(f"Error adding role: {e}")
+            return False
+    
+    def _create_or_update_role_transaction(self, tx, role_id, job_title, alternative_titles, 
+                                          degree_requirement, fields_of_study, total_experience_years,
+                                          required_skills, location, remote_option, industry_sector,
+                                          role_level, keywords):
+        """Create or update a Role node and its relationships in a transaction"""
+        
+        # Convert boolean to string for Neo4j compatibility
+        remote_option_str = str(remote_option).lower()
+        
+        # 1. Create/Update the Role node
+        tx.run("""
+        MERGE (r:Role {id: $role_id})
+        SET r.job_title = $job_title,
+            r.alternative_titles = $alternative_titles,
+            r.degree_requirement = $degree_requirement,
+            r.total_experience_years = $total_experience_years,
+            r.location = $location,
+            r.remote_option = $remote_option,
+            r.industry_sector = $industry_sector,
+            r.role_level = $role_level,
+            r.keywords = $keywords,
+            r.updated_at = datetime()
+        """, {
+            "role_id": role_id,
+            "job_title": job_title,
+            "alternative_titles": alternative_titles or "",
+            "degree_requirement": degree_requirement or "any",
+            "total_experience_years": total_experience_years or 0,
+            "location": location or "",
+            "remote_option": remote_option_str,
+            "industry_sector": industry_sector or "",
+            "role_level": role_level or "",
+            "keywords": keywords or ""
+        })
+        
+        # 2. Clear existing relationships to update with fresh data
+        tx.run("""
+        MATCH (r:Role {id: $role_id})
+        OPTIONAL MATCH (r)-[rel:REQUIRES_SKILL|REQUIRES_FIELD_OF_STUDY]->()
+        DELETE rel
+        """, {"role_id": role_id})
+        
+        # 3. Create field of study relationships with alternatives
+        if fields_of_study:
+            for field in fields_of_study:
+                if field.get("name"):
+                    field_name = field["name"].strip().lower()
+                    alternative_fields = field.get("alternative_fields", "").strip().lower()
+                    importance = field.get("importance", "required")
+                    
+                    # Create main field of study node and relationship
+                    tx.run("""
+                    MERGE (f:FieldOfStudy {name: $field_name})
+                    WITH f
+                    MATCH (r:Role {id: $role_id})
+                    CREATE (r)-[rel:REQUIRES_FIELD_OF_STUDY {importance: $importance}]->(f)
+                    """, {
+                        "role_id": role_id,
+                        "field_name": field_name,
+                        "importance": importance
+                    })
+                    
+                    # Create alternative field nodes and relationships
+                    if alternative_fields:
+                        for alt_field in [f.strip() for f in alternative_fields.split(",") if f.strip()]:
+                            tx.run("""
+                            MERGE (af:FieldOfStudy {name: $alt_field_name, is_alternative: true})
+                            WITH af
+                            MATCH (f:FieldOfStudy {name: $field_name, is_alternative: false})
+                            MERGE (af)-[:ALTERNATIVE_OF]->(f)
+                            """, {
+                                "alt_field_name": alt_field,
+                                "field_name": field_name
+                            })
+        
+        # 4. Parse and create skill requirements with alternatives
+        if required_skills:
+            # If the required_skills is a string in the old format, parse it
+            if isinstance(required_skills, str):
+                old_skills = required_skills.split(",")
+                for skill_entry in old_skills:
+                    if ":" in skill_entry:
+                        parts = skill_entry.split(":")
                         if len(parts) >= 3:
-                            skill_name = parts[0].strip()
-                            try:
-                                importance = int(parts[1].strip())
-                                is_required = parts[2].lower() == 'true'
-                            except ValueError:
-                                importance = 5  # Default importance
-                                is_required = True  # Default required
+                            skill_name = parts[0].strip().lower()
+                            importance = int(parts[1]) if parts[1].isdigit() else 5
+                            is_required = parts[2].lower() == "true"
                             
-                            skills_to_process.append({
-                                "name": skill_name,
-                                "importance": importance,
+                            tx.run("""
+                            MERGE (s:Skill {name: $skill_name})
+                            WITH s
+                            MATCH (r:Role {id: $role_id})
+                            CREATE (r)-[rel:REQUIRES_SKILL {
+                                importance: $importance_str, 
+                                is_required: $is_required,
+                                minimum_years: 0
+                            }]->(s)
+                            """, {
+                                "role_id": role_id,
+                                "skill_name": skill_name,
+                                "importance_str": "required" if is_required else "preferred",
                                 "is_required": is_required
                             })
-                    else:
-                        # Default format if no importance/required flags
-                        skills_to_process.append({
-                            "name": skill_entry,
-                            "importance": 5,
-                            "is_required": True
+            else:
+                # Handle new format with dictionaries
+                for skill in required_skills:
+                    if isinstance(skill, dict) and skill.get("name"):
+                        skill_name = skill["name"].strip().lower()
+                        alternative_names = skill.get("alternative_names", "").strip().lower()
+                        importance = skill.get("importance", "required")
+                        minimum_years = skill.get("minimum_years", 0)
+                        
+                        # Create main skill node and relationship
+                        tx.run("""
+                        MERGE (s:Skill {name: $skill_name, is_alternative: false})
+                        WITH s
+                        MATCH (r:Role {id: $role_id})
+                        CREATE (r)-[rel:REQUIRES_SKILL {
+                            importance: $importance,
+                            is_required: $is_required,
+                            minimum_years: $minimum_years
+                        }]->(s)
+                        """, {
+                            "role_id": role_id,
+                            "skill_name": skill_name,
+                            "importance": importance,
+                            "is_required": importance == "required",
+                            "minimum_years": minimum_years
                         })
-            
-            # Create the role node
-            query = """
-            CREATE (r:Role {
-                id: $id,
-                job_title: $job_title,
-                degree_requirement: $degree_requirement,
-                field_of_study: $field_of_study,
-                experience_years: $experience_years,
-                location_remote: $location_remote,
-                industry_sector: $industry_sector,
-                role_level: $role_level,
-                created_at: datetime()
+                        
+                        # Create alternative skill nodes and relationships
+                        if alternative_names:
+                            for alt_skill in [s.strip() for s in alternative_names.split(",") if s.strip()]:
+                                tx.run("""
+                                MERGE (as:Skill {name: $alt_skill_name, is_alternative: true})
+                                WITH as
+                                MATCH (s:Skill {name: $skill_name, is_alternative: false})
+                                MERGE (as)-[:ALTERNATIVE_OF]->(s)
+                                """, {
+                                    "alt_skill_name": alt_skill,
+                                    "skill_name": skill_name
+                                })
+        
+        # 5. Create job title alternatives
+        if alternative_titles:
+            # Create job title node for the primary title
+            tx.run("""
+            MERGE (jt:JobTitle {name: $job_title, is_alternative: false})
+            WITH jt
+            MATCH (r:Role {id: $role_id})
+            MERGE (r)-[:HAS_JOB_TITLE]->(jt)
+            """, {
+                "role_id": role_id,
+                "job_title": job_title
             })
-            RETURN r.id as id
-            """
             
-            params = {
-                "id": role_id,
-                "job_title": job_title,
-                "degree_requirement": degree_requirement,
-                "field_of_study": field_of_study,
-                "experience_years": int(experience_years),
-                "location_remote": location_remote,
-                "industry_sector": industry_sector,
-                "role_level": role_level
-            }
-            
-            results = self.run_query(query, params)
-            
-            if results and len(results) > 0:
-                # Now create skill nodes and relationships
-                for skill_data in skills_to_process:
-                    skill_query = """
-                    MERGE (s:Skill {name: $skill_name})
-                    WITH s
-                    MATCH (r:Role {id: $role_id})
-                    MERGE (r)-[rel:REQUIRES_SKILL {
-                        importance: $importance,
-                        is_required: $is_required
-                    }]->(s)
-                    """
-                    
-                    skill_params = {
-                        "role_id": role_id,
-                        "skill_name": skill_data["name"],
-                        "importance": skill_data["importance"],
-                        "is_required": skill_data["is_required"]
-                    }
-                    
-                    self.run_query(skill_query, skill_params)
-                    
-                logger.info(f"Added new Role with ID: {role_id} and associated skills")
-                return True
-            else:
-                logger.error("Failed to add Role")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error adding Role: {e}")
-            return False
-
-    def update_role(self, role_id, job_title, degree_requirement, field_of_study, 
-                    experience_years, required_skills, location_remote,
-                    industry_sector="", role_level=""):
-        """
-        Update an existing role in Neo4j with improved skill representation
-        
-        Returns:
-            bool: Success or failure
-        """
-        if not self.connect():
-            logger.warning("Cannot connect to Neo4j to update role")
-            return False
-        
-        try:
-            # Parse required_skills into a structured format
-            # Input format should be: "Skill:importance:required,Skill2:importance:required"
-            skills_to_process = []
-            
-            if isinstance(required_skills, str) and required_skills:
-                skills_list = [s.strip() for s in required_skills.split(',')]
-                for skill_entry in skills_list:
-                    if ':' in skill_entry:
-                        parts = skill_entry.split(':')
-                        if len(parts) >= 3:
-                            skill_name = parts[0].strip()
-                            try:
-                                importance = int(parts[1].strip())
-                                is_required = parts[2].lower() == 'true'
-                            except ValueError:
-                                importance = 5
-                                is_required = True
-                            
-                            skills_to_process.append({
-                                "name": skill_name,
-                                "importance": importance,
-                                "is_required": is_required
-                            })
-                    else:
-                        skills_to_process.append({
-                            "name": skill_entry,
-                            "importance": 5,
-                            "is_required": True
-                        })
-            
-            # Update the role node
-            query = """
-            MATCH (r:Role {id: $id})
-            SET r.job_title = $job_title,
-                r.degree_requirement = $degree_requirement,
-                r.field_of_study = $field_of_study,
-                r.experience_years = $experience_years,
-                r.location_remote = $location_remote,
-                r.industry_sector = $industry_sector,
-                r.role_level = $role_level,
-                r.updated_at = datetime()
-            RETURN r.id as id
-            """
-            
-            params = {
-                "id": role_id,
-                "job_title": job_title,
-                "degree_requirement": degree_requirement,
-                "field_of_study": field_of_study,
-                "experience_years": int(experience_years),
-                "location_remote": location_remote,
-                "industry_sector": industry_sector,
-                "role_level": role_level
-            }
-            
-            results = self.run_query(query, params)
-            
-            if results and len(results) > 0:
-                # First remove all existing skill relationships
-                delete_skills_query = """
-                MATCH (r:Role {id: $role_id})-[rel:REQUIRES_SKILL]->()
-                DELETE rel
-                """
-                self.run_query(delete_skills_query, {"role_id": role_id})
-                
-                # Now create new skill nodes and relationships
-                for skill_data in skills_to_process:
-                    skill_query = """
-                    MERGE (s:Skill {name: $skill_name})
-                    WITH s
-                    MATCH (r:Role {id: $role_id})
-                    MERGE (r)-[rel:REQUIRES_SKILL {
-                        importance: $importance,
-                        is_required: $is_required
-                    }]->(s)
-                    """
-                    
-                    skill_params = {
-                        "role_id": role_id,
-                        "skill_name": skill_data["name"],
-                        "importance": skill_data["importance"],
-                        "is_required": skill_data["is_required"]
-                    }
-                    
-                    self.run_query(skill_query, skill_params)
-                    
-                logger.info(f"Updated Role with ID: {role_id} and associated skills")
-                return True
-            else:
-                logger.error(f"Failed to update Role with ID: {role_id} - Role not found")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error updating Role: {e}")
-            return False
-
-    def delete_role(self, role_id):
-        """
-        Delete a role from Neo4j
-        
-        Returns:
-            bool: Success or failure
-        """
-        if not self.connect():
-            logger.warning("Cannot connect to Neo4j to delete role")
-            return False
-        
-        try:
-            query = """
-            MATCH (r:Role {id: $id})
-            DETACH DELETE r
-            RETURN count(r) as deleted_count
-            """
-            
-            params = {"id": role_id}
-            
-            results = self.run_query(query, params)
-            
-            if results and results[0]['deleted_count'] > 0:
-                logger.info(f"Deleted Role with ID: {role_id}")
-                return True
-            else:
-                logger.warning(f"No Role found with ID: {role_id} to delete")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error deleting Role: {e}")
-            return False
-        
-    # Add this method to the Neo4jService class
-
-        # Update the insert_cv_data method
+            # Create alternative job title nodes and relationships
+            for alt_title in [t.strip() for t in alternative_titles.split(",") if t.strip()]:
+                tx.run("""
+                MERGE (ajt:JobTitle {name: $alt_title, is_alternative: true})
+                WITH ajt
+                MATCH (jt:JobTitle {name: $job_title, is_alternative: false})
+                MERGE (ajt)-[:ALTERNATIVE_OF]->(jt)
+                """, {
+                    "alt_title": alt_title,
+                    "job_title": job_title
+                })
     
     def insert_cv_data(self, cv_data, cv_filename):
         """
