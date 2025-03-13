@@ -377,8 +377,13 @@ def add_role_form(neo4j_service):
         
         if submit:
             # Validate form
+            validation_errors = []
             if not job_title:
-                st.error("Job title is required")
+                validation_errors.append("Job title is required")
+            
+            if validation_errors:
+                for error in validation_errors:
+                    st.error(error)
             else:
                 # Process fields of study - remove empty entries
                 fields_of_study = [f for f in st.session_state.fields_of_study 
@@ -388,41 +393,32 @@ def add_role_form(neo4j_service):
                 required_skills = [s for s in st.session_state.required_skills 
                                  if s["name"].strip()]
                 
-                # Format required skills for Neo4j service
-                skills_format = []
-                for skill in required_skills:
-                    # Format: "skill_name:importance:is_required"
-                    importance_value = 10 if skill["importance"] == "required" else 5 if skill["importance"] == "preferred" else 2
-                    is_required = skill["importance"] == "required"
-                    skills_format.append(f"{skill['name']}:{importance_value}:{is_required}")
-                
-                skills_string = ",".join(skills_format)
-                
-                # Format field of study for Neo4j service - take first field for now
-                field_of_study = fields_of_study[0]["name"] if fields_of_study else ""
-                
                 # Generate a unique ID if adding a new role
-                role_id = st.session_state.edit_role_id if st.session_state.edit_role_id else f"role_{uuid.uuid4().hex[:8]}"
+                role_id = st.session_state.edit_role_id if st.session_state.edit_role_id else f"posting_{uuid.uuid4().hex[:8]}"
                 
                 # Save to Neo4j
-                success = neo4j_service.add_role(
-                    role_id=role_id,
-                    job_title=job_title,
-                    alternative_titles=st.session_state.alternative_titles,
-                    degree_requirement=degree_requirement,
-                    fields_of_study=fields_of_study,
-                    total_experience_years=total_experience_years,
-                    required_skills=skills_string,
-                    location=location,
-                    remote_option=remote_option,
-                    industry_sector=industry_sector,
-                    role_level=role_level,
-                    keywords=keywords
-                )
-                if success:
-                    st.success("Role updated successfully!")
-                else:
-                    st.error("Failed to update role")
+                try:
+                    success = neo4j_service.add_role(
+                        role_id=role_id,
+                        job_title=job_title,
+                        alternative_titles=st.session_state.alternative_titles,
+                        degree_requirement=degree_requirement,
+                        fields_of_study=fields_of_study,
+                        total_experience_years=total_experience_years,
+                        required_skills=required_skills,
+                        location=location,
+                        remote_option=remote_option,
+                        industry_sector=industry_sector,
+                        role_level=role_level,
+                        keywords=keywords
+                    )
+                    if success:
+                        st.success("Role updated successfully!")
+                        # Consider resetting the form or redirecting
+                    else:
+                        st.error("Failed to update role - database operation unsuccessful")
+                except Exception as e:
+                    st.error(f"Error updating role: {str(e)}")
 
 
 def reset_form_fields():

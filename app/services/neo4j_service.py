@@ -1,12 +1,18 @@
 import os
 import logging
-from neo4j import GraphDatabase
+from typing import List, Dict, Any, Optional, Union, Tuple, cast
+from neo4j import GraphDatabase, Session, Transaction
 from dotenv import load_dotenv
 import re
 from string import Template
 from pathlib import Path
-import json  # Add this import
+import json
 import datetime
+
+# Import Pydantic models
+from app.pyd_models.models import (
+    JobPostingData, SkillRequirement, FieldOfStudy
+)
 
 # Load environment variables
 load_dotenv()
@@ -79,137 +85,88 @@ class Neo4jService:
         s = "_" + re.sub(r'[\W_]', '', _id).lower()  # avoid numbers appearing as firstchar
         return s[:20]  # restrict variable size
     
-    def generate_cypher(self, file_name, in_json):
-        """Generate Cypher statements for entity and relationship insertion"""
-        e_map = {}
-        e_stmt = []
-        r_stmt = []
-        e_stmt_tpl = Template("($id:$label{id:'$key'})")
-        r_stmt_tpl = Template("""
-          MATCH $src
-          MATCH $tgt
-          MERGE ($src_id)-[:$rel]->($tgt_id)
-        """)
+    # def generate_cypher(self, file_name, in_json):
+    #     """Generate Cypher statements for entity and relationship insertion"""
+    #     e_map = {}
+    #     e_stmt = []
+    #     r_stmt = []
+    #     e_stmt_tpl = Template("($id:$label{id:'$key'})")
+    #     r_stmt_tpl = Template("""
+    #       MATCH $src
+    #       MATCH $tgt
+    #       MERGE ($src_id)-[:$rel]->($tgt_id)
+    #     """)
         
-        # Handle entities
-        for obj in in_json:
-            for j in obj['entities']:
-                props = ''
-                label = j['label']
-                id = ''
-                if label == 'Person':
-                    id = 'p' + str(file_name)
-                elif label == 'Position':
-                    c = j['id'].replace('position', '_')
-                    id = f'j{str(file_name)}{c}'
-                elif label == 'Education':
-                    c = j['id'].replace('education', '_')
-                    id = f'e{str(file_name)}{c}'
-                else:
-                    id = self.get_cypher_compliant_var(j['name'])
+    #     # Handle entities
+    #     for obj in in_json:
+    #         for j in obj['entities']:
+    #             props = ''
+    #             label = j['label']
+    #             id = ''
+    #             if label == 'Person':
+    #                 id = 'p' + str(file_name)
+    #             elif label == 'Position':
+    #                 c = j['id'].replace('position', '_')
+    #                 id = f'j{str(file_name)}{c}'
+    #             elif label == 'Education':
+    #                 c = j['id'].replace('education', '_')
+    #                 id = f'e{str(file_name)}{c}'
+    #             else:
+    #                 id = self.get_cypher_compliant_var(j['name'])
                 
-                if label in ['Person', 'Position', 'Education', 'Skill', 'Company']:
-                    varname = self.get_cypher_compliant_var(j['id'])
-                    stmt = e_stmt_tpl.substitute(id=varname, label=label, key=id)
-                    e_map[varname] = stmt
-                    e_stmt.append('MERGE ' + stmt + self.get_prop_str(j, varname))
+    #             if label in ['Person', 'Position', 'Education', 'Skill', 'Company']:
+    #                 varname = self.get_cypher_compliant_var(j['id'])
+    #                 stmt = e_stmt_tpl.substitute(id=varname, label=label, key=id)
+    #                 e_map[varname] = stmt
+    #                 e_stmt.append('MERGE ' + stmt + self.get_prop_str(j, varname))
             
-            # Handle relationships
-            for st in obj['relationships']:
-                rels = st.split("|")
-                src_id = self.get_cypher_compliant_var(rels[0].strip())
-                rel = rels[1].strip()
-                if rel in ['HAS_SKILL', 'HAS_EDUCATION', 'AT_COMPANY', 'HAS_POSITION']:
-                    tgt_id = self.get_cypher_compliant_var(rels[2].strip())
-                    stmt = r_stmt_tpl.substitute(
-                        src_id=src_id, tgt_id=tgt_id, src=e_map[src_id], tgt=e_map[tgt_id], rel=rel)
-                    r_stmt.append(stmt)
+    #         # Handle relationships
+    #         for st in obj['relationships']:
+    #             rels = st.split("|")
+    #             src_id = self.get_cypher_compliant_var(rels[0].strip())
+    #             rel = rels[1].strip()
+    #             if rel in ['HAS_SKILL', 'HAS_EDUCATION', 'AT_COMPANY', 'HAS_POSITION']:
+    #                 tgt_id = self.get_cypher_compliant_var(rels[2].strip())
+    #                 stmt = r_stmt_tpl.substitute(
+    #                     src_id=src_id, tgt_id=tgt_id, src=e_map[src_id], tgt=e_map[tgt_id], rel=rel)
+    #                 r_stmt.append(stmt)
         
-        return e_stmt, r_stmt
+    #     return e_stmt, r_stmt
     
-    def create_constraints(self):
-        """Create necessary constraints in Neo4j"""
-        constraints = [
-            'CREATE CONSTRAINT unique_person_id IF NOT EXISTS FOR (n:Person) REQUIRE (n.id) IS UNIQUE',
-            'CREATE CONSTRAINT unique_position_id IF NOT EXISTS FOR (n:Position) REQUIRE (n.id) IS UNIQUE',
-            'CREATE CONSTRAINT unique_skill_id IF NOT EXISTS FOR (n:Skill) REQUIRE n.id IS UNIQUE',
-            'CREATE CONSTRAINT unique_education_id IF NOT EXISTS FOR (n:Education) REQUIRE n.id IS UNIQUE',
-            'CREATE CONSTRAINT unique_company_id IF NOT EXISTS FOR (n:Company) REQUIRE n.id IS UNIQUE'
-        ]
+    # def create_constraints(self):
+    #     """Create necessary constraints in Neo4j"""
+    #     constraints = [
+    #         'CREATE CONSTRAINT unique_person_id IF NOT EXISTS FOR (n:Person) REQUIRE (n.id) IS UNIQUE',
+    #         'CREATE CONSTRAINT unique_position_id IF NOT EXISTS FOR (n:Position) REQUIRE (n.id) IS UNIQUE',
+    #         'CREATE CONSTRAINT unique_skill_id IF NOT EXISTS FOR (n:Skill) REQUIRE n.id IS UNIQUE',
+    #         'CREATE CONSTRAINT unique_education_id IF NOT EXISTS FOR (n:Education) REQUIRE n.id IS UNIQUE',
+    #         'CREATE CONSTRAINT unique_company_id IF NOT EXISTS FOR (n:Company) REQUIRE n.id IS UNIQUE'
+    #     ]
         
-        for constraint in constraints:
-            self.run_query(constraint)
+    #     for constraint in constraints:
+    #         self.run_query(constraint)
         
-        logger.info("Neo4j constraints created")
+    #     logger.info("Neo4j constraints created")
         
-    def delete_cv_data(self, cv_filename):
-        """
-        Delete all data related to a specific CV from Neo4j
-        
-        Args:
-            cv_filename: The filename of the CV
-            
-        Returns:
-            bool: True if deleted successfully, False otherwise
-        """
-        if not self.connect():
-            return False
-            
-        try:
-            # Generate ID based on filename (similar to what's used in generate_cypher)
-            file_id = cv_filename.replace(".", "_").replace(" ", "_")
-            person_id = f"p{file_id}"
-            
-            # First find the person node
-            query = """
-            MATCH (p:Person {id: $person_id})
-            RETURN p
-            """
-            result = self.run_query(query, {"person_id": person_id})
-            
-            if not result:
-                logger.warning(f"Person node not found for CV: {cv_filename}")
-                return False
-                
-            # Delete all relationships and nodes created from this CV
-            # Use this pattern to match the CV-specific IDs
-            delete_query = """
-            // Match person and all connected entities
-            MATCH (p:Person {id: $person_id})
-            OPTIONAL MATCH (p)-[r1]-(connected)
-            OPTIONAL MATCH (connected)-[r2]-(secondary)
-            WHERE connected:Position OR connected:Education OR connected:Skill OR connected:Company
-            
-            // Delete all relationships first
-            DETACH DELETE p, connected, secondary
-            """
-            
-            self.run_query(delete_query, {"person_id": person_id})
-            logger.info(f"Deleted Neo4j data for CV: {cv_filename}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error deleting Neo4j data for CV {cv_filename}: {e}")
-            return False
     
     def get_all_roles(self):
         """
-        Retrieve all role nodes from Neo4j with their skill relationships
+        Retrieve all job posting nodes from Neo4j with their skill relationships
         
         Returns:
-            list: List of dictionaries containing role information
+            list: List of dictionaries containing job posting information
         """
         if not self.connect():
-            logger.warning("Cannot connect to Neo4j to retrieve roles")
+            logger.warning("Cannot connect to Neo4j to retrieve job postings")
             return []
         
         try:
             query = """
-            MATCH (role:Role)
-            OPTIONAL MATCH (role)-[rel:REQUIRES_SKILL]->(skill:Skill)
-            WITH role, 
+            MATCH (posting:JobPosting)
+            OPTIONAL MATCH (posting)-[rel:REQUIRES_SKILL]->(skill:Skill)
+            WITH posting, 
                  collect({name: skill.name, importance: rel.importance, is_required: rel.is_required}) AS skills
-            RETURN role {
+            RETURN posting {
                 .*, 
                 skills: skills,
                 required_skills: CASE 
@@ -228,272 +185,58 @@ class Neo4jService:
                 for record in results:
                     if 'role' in record:
                         role_data = record['role']
+                        # Ensure job_title is available for display
+                        if 'title' in role_data and 'job_title' not in role_data:
+                            role_data['job_title'] = role_data['title']
                         roles.append(role_data)
                         
-                logger.info(f"Retrieved {len(roles)} Role nodes from Neo4j")
+                logger.info(f"Retrieved {len(roles)} JobPosting nodes from Neo4j")
             else:
-                logger.warning("No Role nodes found in Neo4j database")
+                logger.warning("No JobPosting nodes found in Neo4j database")
                 
             return roles
             
         except Exception as e:
-            logger.error(f"Error retrieving Role nodes: {e}")
-            return []
-    
-    def get_all_cv_nodes(self):
-        """
-        Retrieve all CV nodes from Neo4j
-        
-        Returns:
-            list: List of dictionaries containing CV information
-        """
-        if not self.connect():
-            logger.warning("Cannot connect to Neo4j to retrieve CVs")
-            return []
-        
-        try:
-            # Use the same query you've verified works in Neo4j Browser
-            query = """
-            MATCH (cv:CV) 
-            RETURN cv {.*} as cv
-            """
-            
-            results = self.run_query(query)
-            
-            # Process results into the expected format
-            cvs = []
-            if results:
-                for record in results:
-                    if 'cv' in record:
-                        cv_data = record['cv']
-                        
-                        # Ensure consistent property names
-                        if 'file_name' in cv_data and 'filename' not in cv_data:
-                            cv_data['filename'] = cv_data['file_name']
-                        
-                        # Ensure upload_date is properly formatted
-                        if 'upload_date' in cv_data and cv_data['upload_date']:
-                            # Check if it's already a datetime
-                            if not isinstance(cv_data['upload_date'], datetime):
-                                try:
-                                    cv_data['upload_date'] = datetime.fromisoformat(cv_data['upload_date'])
-                                except:
-                                    # Keep as is if parsing fails
-                                    pass
-                        
-                        cvs.append(cv_data)
-                        
-                logger.info(f"Retrieved {len(cvs)} CV nodes from Neo4j")
-            else:
-                logger.warning("No CV nodes found in Neo4j database")
-                
-            return cvs
-            
-        except Exception as e:
-            logger.error(f"Error retrieving CV nodes: {e}")
-            return []
-    
-    
-    def delete_cv_node(self, cv_id):
-        """
-        Delete a CV node and its connected data
-        
-        Args:
-            cv_id: The ID of the CV node
-            
-        Returns:
-            bool: True if deleted successfully, False otherwise
-        """
-        if not self.connect():
-            return False
-            
-        try:
-            # Delete the CV node and all its relationships
-            query = """
-            MATCH (p:Person {id: $cv_id})
-            OPTIONAL MATCH (p)-[r]->(n)
-            DETACH DELETE p, n
-            """
-            
-            self.run_query(query, {'cv_id': cv_id})
-            logger.info(f"Deleted CV node with ID: {cv_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error deleting CV node: {e}")
-            return False
-    
-    def delete_all_cv_nodes(self):
-        """
-        Delete all CV nodes and their connected data including derived Person nodes 
-        and all related data (Skills, Education, etc.), preserving Role nodes
-        
-        Returns:
-            bool: True if deleted successfully, False otherwise
-        """
-        if not self.connect():
-            return False
-            
-        try:
-            # First get all CV file_names for logging
-            query_get_cvs = """
-            MATCH (c:CV)
-            RETURN c.file_name as file_name
-            """
-            cv_results = self.run_query(query_get_cvs)
-            cv_count = len(cv_results) if cv_results else 0
-            
-            # Delete all Person nodes and cascading delete all connected nodes (except Role)
-            delete_query = """
-            // Match all Person nodes (derived from CVs)
-            MATCH (p:Person)
-            
-            // Match all directly connected nodes
-            OPTIONAL MATCH (p)-[r1]-(connected)
-            WHERE NOT connected:Role
-            
-            // Match secondary connected nodes
-            OPTIONAL MATCH (connected)-[r2]-(secondary)
-            WHERE NOT secondary:Role AND connected:Position OR connected:Education OR connected:Project
-            
-            // Delete all relationships and nodes
-            DETACH DELETE p, connected, secondary
-            """
-            self.run_query(delete_query)
-            
-            # Delete CV nodes
-            cv_query = """
-            MATCH (c:CV)
-            DETACH DELETE c
-            """
-            self.run_query(cv_query)
-            
-            logger.info(f"Deleted all CV nodes ({cv_count} total) and their associated data")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Error deleting all CV nodes and their data: {e}")
-            return False
-    def insert_cv_node(self, file_name):
-        """
-        Insert a new CV node into the Neo4j database
-        
-        Args:
-            file_name (str): The filename of the CV
-            
-        Returns:
-            bool: True if inserted successfully, False otherwise
-        """
-        if not self.connect():
-            return False
-            
-        try:
-            upload_time = datetime.datetime.now().isoformat()
-            
-            # Notice we're using self.driver directly, not self.driver.driver
-            with self.driver.session() as session:
-                session.run(
-                    """
-                    CREATE (c:CV {
-                        file_name: $file_name,
-                        upload_datetime: $upload_datetime,
-                        extracted: false
-                    })
-                    """,
-                    file_name=file_name,
-                    upload_datetime=upload_time
-                )
-                
-            logger.info(f"Created CV node for file: {file_name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error creating CV node: {e}")
-            return False
-        
-    def update_cv_extraction_status(self, file_name, status=True):
-        """
-        Update the extraction status of a CV node
-        
-        Args:
-            file_name (str): The filename of the CV
-            status (bool): The extraction status to set
-            
-        Returns:
-            bool: True if updated successfully, False otherwise
-        """
-        if not self.connect():
-            return False
-            
-        try:
-            query = """
-            MATCH (c:CV {file_name: $file_name})
-            SET c.extracted = $status
-            RETURN c
-            """
-            
-            result = self.run_query(query, {"file_name": file_name, "status": status})
-            if result:
-                logger.info(f"Updated extraction status to {status} for CV: {file_name}")
-                return True
-            else:
-                logger.warning(f"CV node not found for file: {file_name}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error updating CV extraction status: {e}")
-            return False
-        
-    
-    def get_unextracted_cvs(self):
-        """
-        Get all CV nodes that have not been extracted
-        
-        Returns:
-            list: List of CV nodes with extracted=false
-        """
-        if not self.connect():
-            return []
-            
-        try:
-            query = """
-            MATCH (c:CV {extracted: false})
-            RETURN c.file_name as file_name
-            """
-            
-            results = self.run_query(query)
-            if results:
-                return [result['file_name'] for result in results]
-            else:
-                return []
-                
-        except Exception as e:
-            logger.error(f"Error getting unextracted CVs: {e}")
+            logger.error(f"Error retrieving JobPosting nodes: {e}")
             return []
 
-    def add_role(self, role_id, job_title, alternative_titles=None, degree_requirement=None, 
-                 fields_of_study=None, total_experience_years=0, required_skills=None,
-                 location=None, remote_option=None, industry_sector=None, role_level=None,
-                 keywords=None):
+
+        
+        
+    def add_role(
+        self, 
+        role_id: str, 
+        job_title: str, 
+        alternative_titles: Optional[str] = None, 
+        degree_requirement: Optional[str] = None, 
+        fields_of_study: Optional[List[Dict[str, Any]]] = None,  # Changed to match actual input type 
+        total_experience_years: int = 0, 
+        required_skills: Optional[List[Dict[str, Any]]] = None,  # Changed to match actual input type
+        location: Optional[str] = None, 
+        remote_option: Optional[bool] = False, 
+        industry_sector: Optional[str] = None, 
+        role_level: Optional[str] = None,
+        keywords: Optional[str] = None
+    ) -> bool:
         """
         Add a new role to Neo4j with support for alternative titles and fields
         
         Args:
-            role_id (str): Unique identifier for the role
-            job_title (str): Title of the job
-            alternative_titles (str): Alternative titles for the job (comma-separated)
-            degree_requirement (str): Required degree level
-            fields_of_study (list): List of field objects with name, alternative_fields and importance
-            total_experience_years (int): Required years of experience
-            required_skills (str): Required skills in format "Skill:importance:required,Skill2:importance:required"
-            location (str): Job location
-            remote_option (bool): Remote work options
-            industry_sector (str): Industry sector
-            role_level (str): Level of the role
-            keywords (str): Keywords related to the role (comma-separated)
+            role_id: Unique identifier for the role
+            job_title: Title of the job
+            alternative_titles: Alternative titles for the job (comma-separated)
+            degree_requirement: Required degree level
+            fields_of_study: List of dictionaries with name, alternative_fields and importance
+            total_experience_years: Required years of experience
+            required_skills: List of dictionaries with name, alternative_names, importance and minimum_years
+            location: Job location
+            remote_option: Remote work options
+            industry_sector: Industry sector
+            role_level: Level of the role
+            keywords: Keywords related to the role (comma-separated)
             
         Returns:
-            bool: True if added successfully, False otherwise
+            True if added successfully, False otherwise
         """
         if not self.connect():
             logger.warning("Cannot connect to Neo4j to add role")
@@ -502,19 +245,21 @@ class Neo4jService:
         try:
             # Begin transaction for atomic operation
             with self.driver.session() as session:
-                session.execute_write(self._create_or_update_role_transaction, 
-                                     role_id, 
-                                     job_title,
-                                     alternative_titles,
-                                     degree_requirement,
-                                     fields_of_study,
-                                     total_experience_years,
-                                     required_skills,
-                                     location,
-                                     remote_option,
-                                     industry_sector,
-                                     role_level,
-                                     keywords)
+                session.execute_write(
+                    self._create_or_update_role_transaction, 
+                    role_id, 
+                    job_title,
+                    alternative_titles,
+                    degree_requirement,
+                    fields_of_study,
+                    total_experience_years,
+                    required_skills,
+                    location,
+                    remote_option,
+                    industry_sector,
+                    role_level,
+                    keywords
+                )
                 
             logger.info(f"Role {role_id} added/updated successfully")
             return True
@@ -523,30 +268,58 @@ class Neo4jService:
             logger.error(f"Error adding role: {e}")
             return False
     
-    def _create_or_update_role_transaction(self, tx, role_id, job_title, alternative_titles, 
-                                          degree_requirement, fields_of_study, total_experience_years,
-                                          required_skills, location, remote_option, industry_sector,
-                                          role_level, keywords):
-        """Create or update a Role node and its relationships in a transaction"""
+    def _create_role_transaction(
+        self, 
+        tx: Transaction, 
+        role_id: str, 
+        job_title: str, 
+        alternative_titles: Optional[str] = None, 
+        degree_requirement: Optional[str] = None, 
+        fields_of_study: Optional[List[Dict[str, Any]]] = None, 
+        total_experience_years: int = 0, 
+        required_skills: Optional[List[Dict[str, Any]]] = None,
+        location: Optional[str] = None, 
+        remote_option: Optional[bool] = False, 
+        industry_sector: Optional[str] = None, 
+        role_level: Optional[str] = None,
+        keywords: Optional[str] = None
+    ) -> bool:
+        """
+        Create a new JobPosting node and its relationships in Neo4j without updating existing data
+        """
+        # First check if the job posting already exists
+        check_result = tx.run(
+            "MATCH (j:JobPosting {id: $posting_id}) RETURN count(j) as count",
+            {"posting_id": role_id}
+        ).single()
+        
+        if check_result and check_result["count"] > 0:
+            return False
         
         # Convert boolean to string for Neo4j compatibility
         remote_option_str = str(remote_option).lower()
         
-        # 1. Create/Update the Role node
+        # Create JobPosting node with all properties
         tx.run("""
-        MERGE (r:Role {id: $role_id})
-        SET r.job_title = $job_title,
-            r.alternative_titles = $alternative_titles,
-            r.degree_requirement = $degree_requirement,
-            r.total_experience_years = $total_experience_years,
-            r.location = $location,
-            r.remote_option = $remote_option,
-            r.industry_sector = $industry_sector,
-            r.role_level = $role_level,
-            r.keywords = $keywords,
-            r.updated_at = datetime()
+        CREATE (jp:JobPosting {
+            id: $posting_id,
+            title: $job_title,
+            job_title: $job_title,
+            alternative_titles: $alternative_titles,
+            degree_requirement: $degree_requirement,
+            total_experience_years: $total_experience_years,
+            location: $location,
+            remote_option: $remote_option,
+            industry_sector: $industry_sector,
+            role_level: $role_level,
+            keywords: $keywords,
+            description: $job_description,
+            posting_text: $posting_text,
+            created_at: datetime()
+        })
+        RETURN jp
         """, {
-            "role_id": role_id,
+            "posting_id": role_id,
             "job_title": job_title,
             "alternative_titles": alternative_titles or "",
             "degree_requirement": degree_requirement or "any",
@@ -555,342 +328,358 @@ class Neo4jService:
             "remote_option": remote_option_str,
             "industry_sector": industry_sector or "",
             "role_level": role_level or "",
-            "keywords": keywords or ""
+            "keywords": keywords or "",
+            "job_description": keywords or "",
+            "posting_text": f"{job_title} - {industry_sector or ''} - {keywords or ''}"
         })
         
-        # 2. Clear existing relationships to update with fresh data
-        tx.run("""
-        MATCH (r:Role {id: $role_id})
-        OPTIONAL MATCH (r)-[rel:REQUIRES_SKILL|REQUIRES_FIELD_OF_STUDY]->()
-        DELETE rel
-        """, {"role_id": role_id})
-        
-        # 3. Create field of study relationships with alternatives
+        # Process fields of study relationships directly to JobPosting
         if fields_of_study:
             for field in fields_of_study:
-                if field.get("name"):
-                    field_name = field["name"].strip().lower()
-                    alternative_fields = field.get("alternative_fields", "").strip().lower()
-                    importance = field.get("importance", "required")
+                if isinstance(field, dict) and 'name' in field and field['name'].strip():
+                    field_name = field['name'].strip().lower()
+                    alternative_fields = field.get('alternative_fields', '').strip().lower() if field.get('alternative_fields') else ""
+                    importance = field.get('importance', 'required')
                     
-                    # Create main field of study node and relationship
+                    # Create main field of study node and relationship directly to JobPosting
                     tx.run("""
                     MERGE (f:FieldOfStudy {name: $field_name})
                     WITH f
-                    MATCH (r:Role {id: $role_id})
-                    CREATE (r)-[rel:REQUIRES_FIELD_OF_STUDY {importance: $importance}]->(f)
+                    MATCH (jp:JobPosting {id: $posting_id})
+                    CREATE (jp)-[rel:REQUIRES_FIELD_OF_STUDY {importance: $importance}]->(f)
                     """, {
-                        "role_id": role_id,
+                        "posting_id": role_id,
                         "field_name": field_name,
                         "importance": importance
-                    })
+                    })           
                     
-                    # Create alternative field nodes and relationships
+                    # Create alternative fields
                     if alternative_fields:
                         for alt_field in [f.strip() for f in alternative_fields.split(",") if f.strip()]:
                             tx.run("""
                             MERGE (af:FieldOfStudy {name: $alt_field_name, is_alternative: true})
                             WITH af
-                            MATCH (f:FieldOfStudy {name: $field_name, is_alternative: false})
-                            MERGE (af)-[:ALTERNATIVE_OF]->(f)
+                            MATCH (f:FieldOfStudy {name: $field_name})
+                            CREATE (af)-[:ALTERNATIVE_OF]->(f)
                             """, {
                                 "alt_field_name": alt_field,
                                 "field_name": field_name
                             })
         
-        # 4. Parse and create skill requirements with alternatives
+        # Process required skills
         if required_skills:
-            # If the required_skills is a string in the old format, parse it
-            if isinstance(required_skills, str):
-                old_skills = required_skills.split(",")
-                for skill_entry in old_skills:
-                    if ":" in skill_entry:
-                        parts = skill_entry.split(":")
-                        if len(parts) >= 3:
-                            skill_name = parts[0].strip().lower()
-                            importance = int(parts[1]) if parts[1].isdigit() else 5
-                            is_required = parts[2].lower() == "true"
-                            
+            for skill in required_skills:
+                if isinstance(skill, dict) and 'name' in skill and skill['name'].strip():
+                    skill_name = skill['name'].strip().lower()
+                    importance = skill.get('importance', 'required')
+                    minimum_years = skill.get('minimum_years', 0)
+                    alt_names = skill.get('alternative_names', '')
+                    
+                    tx.run("""
+                    MERGE (s:Skill {name: $skill_name})
+                    WITH s
+                    MATCH (jp:JobPosting {id: $posting_id})
+                    CREATE (jp)-[rel:REQUIRES_SKILL {
+                        importance: $importance, 
+                        is_required: $is_required,
+                        minimum_years: $minimum_years
+                    }]->(s)
+                    """, {
+                        "posting_id": role_id,
+                        "skill_name": skill_name,
+                        "importance": importance,
+                        "is_required": importance == "required",
+                        "minimum_years": minimum_years
+                    })
+                    
+                    # Process alternative skill names
+                    if alt_names:
+                        for alt_name in [n.strip() for n in alt_names.split(",") if n.strip()]:
                             tx.run("""
-                            MERGE (s:Skill {name: $skill_name})
-                            WITH s
-                            MATCH (r:Role {id: $role_id})
-                            CREATE (r)-[rel:REQUIRES_SKILL {
-                                importance: $importance_str, 
-                                is_required: $is_required,
-                                minimum_years: 0
-                            }]->(s)
+                            MERGE (as:Skill {name: $alt_name, is_alternative: true})
+                            WITH as
+                            MATCH (s:Skill {name: $skill_name})
+                            CREATE (as)-[:ALTERNATIVE_OF]->(s)
                             """, {
-                                "role_id": role_id,
-                                "skill_name": skill_name,
-                                "importance_str": "required" if is_required else "preferred",
-                                "is_required": is_required
+                                "alt_name": alt_name,
+                                "skill_name": skill_name
                             })
-            else:
-                # Handle new format with dictionaries
-                for skill in required_skills:
-                    if isinstance(skill, dict) and skill.get("name"):
-                        skill_name = skill["name"].strip().lower()
-                        alternative_names = skill.get("alternative_names", "").strip().lower()
-                        importance = skill.get("importance", "required")
-                        minimum_years = skill.get("minimum_years", 0)
-                        
-                        # Create main skill node and relationship
-                        tx.run("""
-                        MERGE (s:Skill {name: $skill_name, is_alternative: false})
-                        WITH s
-                        MATCH (r:Role {id: $role_id})
-                        CREATE (r)-[rel:REQUIRES_SKILL {
-                            importance: $importance,
-                            is_required: $is_required,
-                            minimum_years: $minimum_years
-                        }]->(s)
-                        """, {
-                            "role_id": role_id,
-                            "skill_name": skill_name,
-                            "importance": importance,
-                            "is_required": importance == "required",
-                            "minimum_years": minimum_years
-                        })
-                        
-                        # Create alternative skill nodes and relationships
-                        if alternative_names:
-                            for alt_skill in [s.strip() for s in alternative_names.split(",") if s.strip()]:
-                                tx.run("""
-                                MERGE (as:Skill {name: $alt_skill_name, is_alternative: true})
-                                WITH as
-                                MATCH (s:Skill {name: $skill_name, is_alternative: false})
-                                MERGE (as)-[:ALTERNATIVE_OF]->(s)
-                                """, {
-                                    "alt_skill_name": alt_skill,
-                                    "skill_name": skill_name
-                                })
-        
-        # 5. Create job title alternatives
-        if alternative_titles:
-            # Create job title node for the primary title
-            tx.run("""
-            MERGE (jt:JobTitle {name: $job_title, is_alternative: false})
-            WITH jt
-            MATCH (r:Role {id: $role_id})
-            MERGE (r)-[:HAS_JOB_TITLE]->(jt)
-            """, {
-                "role_id": role_id,
-                "job_title": job_title
-            })
-            
-            # Create alternative job title nodes and relationships
-            for alt_title in [t.strip() for t in alternative_titles.split(",") if t.strip()]:
-                tx.run("""
-                MERGE (ajt:JobTitle {name: $alt_title, is_alternative: true})
-                WITH ajt
-                MATCH (jt:JobTitle {name: $job_title, is_alternative: false})
-                MERGE (ajt)-[:ALTERNATIVE_OF]->(jt)
-                """, {
-                    "alt_title": alt_title,
-                    "job_title": job_title
-                })
     
-    def insert_cv_data(self, cv_data, cv_filename):
-        """
-        Insert structured CV data into Neo4j all at once using a transaction
-        
-        Args:
-            cv_data: Structured CV data
-            cv_filename: The filename of the CV
-            
-        Returns:
-            bool: True if inserted successfully, False otherwise
-        """
-        if not self.connect():
-            return False
-            
-        try:
-            # Create a unique ID for the person based on filename
-            file_id = cv_filename.replace(".", "_").replace(" ", "_")
-            person_id = f"p{file_id}"
-            
-            with self.driver.session() as session:
-                result = session.execute_write(self._create_cv_data_transaction, person_id, cv_data, cv_filename)
-                
-            logger.info(f"Successfully inserted CV data for {cv_filename}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error inserting CV data: {e}")
-            return False
-    
-    def _create_cv_data_transaction(self, tx, person_id, cv_data, cv_filename):
-        """
-        Create all CV data in a single transaction
-        
-        Args:
-            tx: Neo4j transaction
-            person_id: Person ID
-            cv_data: CV data
-            cv_filename: CV filename
-        """
-        # Create file_id from cv_filename
-        file_id = cv_filename.replace(".", "_").replace(" ", "_")
-        # Create Person node
-        tx.run("""
-        CREATE (p:Person {
-            id: $id,
-            name: $name,
-            role: $role,
-            description: $summary,
-            cv_file_name: $cv_filename,
-            years_experience: $years_experience
-        })
-        """, {
-            "id": person_id,
-            "name": cv_data.person_name,
-            "role": cv_data.current_role,
-            "summary": cv_data.summary,
-            "cv_filename": cv_filename,
-            "years_experience": cv_data.years_experience
-        })
-        
-        # Create Skills
-        for idx, skill in enumerate(cv_data.skills):
+        # Create REQUIRES_EXPERIENCE relationship
+        if job_title and total_experience_years:
+            #Create job title experience as Experience node
             tx.run("""
-            MERGE (s:Skill {name: $skill_name})
-            WITH s
-            MATCH (p:Person {id: $person_id})
-            CREATE (p)-[r:HAS_SKILL {
-                level: $level,
-                years_experience: $years,
-                last_used: $last_used
-            }]->(s)
-            """, {
-                "person_id": person_id,
-                "skill_name": skill['name'],
-                "level": skill.get('level', ''),
-                "years": skill.get('years_experience', 0),
-                "last_used": skill.get('last_used', '')
-            })
-        
-        # Create Education nodes
-        for idx, edu in enumerate(cv_data.education):
-            edu_id = f"e{file_id}_{idx}"
-            tx.run("""
-            CREATE (e:Education {
-                id: $id,
-                degree: $degree,
-                university: $university,
-                graduation_date: $graduation_date,
-                field_of_study: $field_of_study
-            })
+            MERGE (e:Experience {title: $job_title})
             WITH e
-            MATCH (p:Person {id: $person_id})
-            CREATE (p)-[r:HAS_EDUCATION]->(e)
+            MATCH (jp:JobPosting {id: $posting_id})
+            CREATE (jp)-[:REQUIRES_EXPERIENCE {years: $total_experience_years}]->(e)
             """, {
-                "id": edu_id,
-                "person_id": person_id,
-                "degree": edu.get('degree', ''),
-                "university": edu.get('university', ''),
-                "graduation_date": edu.get('graduation_date', ''),
-                "field_of_study": edu.get('field_of_study', '')
+                "posting_id": role_id,
+                "job_title": job_title,
+                "total_experience_years": total_experience_years
             })
-        
-        # Create Position nodes
-        for idx, pos in enumerate(cv_data.positions):
-            pos_id = f"pos{file_id}_{idx}"
-            company_name = pos.get('company', '')  # We'll need to add this to your position data model
+            #Create similar job titles as experience nodes
+            if alternative_titles:
+                for alt_title in [t.strip() for t in alternative_titles.split(",") if t.strip()]:
+                    tx.run("""
+                    MERGE (e:Experience {title: $alt_title})
+                    WITH e
+                    MATCH (jp:JobPosting {id: $posting_id})
+                    CREATE (jp)-[:REQUIRES_EXPERIENCE {years: $total_experience_years}]->(e)
+                    """, {
+                        "posting_id": role_id,
+                        "alt_title": alt_title,
+                        "total_experience_years": total_experience_years
+                    })
             
-            # Create position node
-            tx.run("""
-            CREATE (j:Position {
-                id: $id,
-                title: $title,
-                location: $location,
-                start_date: $start_date,
-                end_date: $end_date,
-                years_experience: $years
-            })
-            WITH j
-            MATCH (p:Person {id: $person_id})
-            CREATE (p)-[r:HAS_POSITION]->(j)
-            """, {
-                "id": pos_id,
-                "person_id": person_id,
-                "title": pos.get('title', ''),
-                "location": pos.get('location', ''),
-                "start_date": pos.get('start_date', ''),
-                "end_date": pos.get('end_date', ''),
-                "years": pos.get('years_experience', 0)
-            })
-            
-            # If company name exists, create company relationship
-            if company_name:
+        # Add any explicit keywords as Keyword nodes
+        if keywords:
+            for keyword in [k.strip() for k in keywords.split(",") if k.strip()]:
                 tx.run("""
-                MERGE (c:Company {name: $company_name})
-                WITH c
-                MATCH (j:Position {id: $pos_id})
-                CREATE (j)-[r:AT_COMPANY]->(c)
+                MERGE (k:Keyword {name: $keyword})
+                WITH k
+                MATCH (jp:JobPosting {id: $posting_id})
+                CREATE (jp)-[:HAS_KEYWORD]->(k)
                 """, {
-                    "company_name": company_name,
-                    "pos_id": pos_id
+                    "posting_id": role_id,
+                    "keyword": keyword
                 })
-        
-        # Create Project nodes  
-        for idx, proj in enumerate(cv_data.projects):
-            proj_id = f"proj{file_id}_{idx}"
-            
-            tx.run("""
-            CREATE (p:Project {
-                id: $id,
-                name: $name,
-                description: $description,
-                outcomes: $outcomes
-            })
-            WITH p
-            MATCH (person:Person {id: $person_id})
-            CREATE (person)-[r:WORKED_ON]->(p)
-            """, {
-                "id": proj_id,
-                "person_id": person_id,
-                "name": proj.get('name', ''),
-                "description": proj.get('description', ''),
-                "outcomes": proj.get('outcomes', '')
-            })
-            
-            # Add technology relationships for each project
-            for tech in proj.get('technologies', []):
-                if tech and isinstance(tech, str):
-                    tech = tech.strip()
-                    if tech:
-                        tx.run("""
-                        MERGE (s:Skill {name: $tech_name})
-                        WITH s
-                        MATCH (p:Project {id: $proj_id})
-                        CREATE (p)-[r:USES_TECHNOLOGY]->(s)
-                        """, {
-                            "proj_id": proj_id,
-                            "tech_name": tech
-                        })
-        
-        # Update the CV node extraction status
-        tx.run("""
-        MATCH (c:CV {file_name: $cv_filename})
-        SET c.extracted = true
-        """, {"cv_filename": cv_filename})
         
         return True
+    
+    def _update_role_transaction(
+        self, 
+        tx: Transaction, 
+        role_id: str, 
+        job_title: str, 
+        alternative_titles: Optional[str] = None, 
+        degree_requirement: Optional[str] = None, 
+        fields_of_study: Optional[List[Dict[str, Any]]] = None, 
+        total_experience_years: int = 0, 
+        required_skills: Optional[List[Dict[str, Any]]] = None,
+        location: Optional[str] = None, 
+        remote_option: Optional[bool] = False, 
+        industry_sector: Optional[str] = None, 
+        role_level: Optional[str] = None,
+        keywords: Optional[str] = None
+    ) -> bool:
+        """
+        Update an existing JobPosting node and its relationships in Neo4j
+        """
+        # First delete all existing relationships
+        tx.run("""
+        MATCH (jp:JobPosting {id: $posting_id})
+        OPTIONAL MATCH (jp)-[r]-()
+        DELETE r
+        """, {"posting_id": role_id})
         
-    def find_matching_candidates(self, role_id, limit=10):
-
-        pass
-        #Don't consider the code below. It might change
-        # """Find candidates matching a specific role"""
-        # query = """
-        # MATCH (role:Role {id: $role_id})
-        # MATCH (role)-[req:REQUIRES_SKILL]->(skill:Skill)<-[has:HAS_SKILL]-(person:Person)
-        # WITH person, 
-        #      sum(CASE WHEN req.is_required THEN req.importance * 2 ELSE req.importance END) as skillScore
-        # ORDER BY skillScore DESC
-        # LIMIT $limit
-        # RETURN person.id as id, person.role as role, person.description as description, 
-        #        skillScore as score
-        # """
-        # return self.run_query(query, {"role_id": role_id, "limit": limit})
+        # Update node properties
+        remote_option_str = str(remote_option).lower()
+        
+        tx.run("""
+        MATCH (jp:JobPosting {id: $posting_id})
+        SET jp.title = $job_title,
+            jp.job_title = $job_title,
+            jp.alternative_titles = $alternative_titles,
+            jp.degree_requirement = $degree_requirement,
+            jp.total_experience_years = $total_experience_years,
+            jp.location = $location,
+            jp.remote_option = $remote_option,
+            jp.industry_sector = $industry_sector,
+            jp.role_level = $role_level,
+            jp.keywords = $keywords,
+            jp.description = $job_description,
+            jp.posting_text = $posting_text,
+            jp.updated_at = datetime()
+        """, {
+            "posting_id": role_id,
+            "job_title": job_title,
+            "alternative_titles": alternative_titles or "",
+            "degree_requirement": degree_requirement or "any",
+            "total_experience_years": total_experience_years or 0,
+            "location": location or "",
+            "remote_option": remote_option_str,
+            "industry_sector": industry_sector or "",
+            "role_level": role_level or "",
+            "keywords": keywords or "",
+            "job_description": keywords or "",
+            "posting_text": f"{job_title} - {industry_sector or ''} - {keywords or ''}"
+        })
+        
+        # Process fields of study
+        if fields_of_study:
+            for field in fields_of_study:
+                if isinstance(field, dict) and 'name' in field and field['name'].strip():
+                    field_name = field['name'].strip().lower()
+                    alternative_fields = field.get('alternative_fields', '').strip().lower() if field.get('alternative_fields') else ""
+                    importance = field.get('importance', 'required')
+                    
+                    tx.run("""
+                    MERGE (f:FieldOfStudy {name: $field_name})
+                    WITH f
+                    MATCH (jp:JobPosting {id: $posting_id})
+                    CREATE (jp)-[rel:REQUIRES_FIELD_OF_STUDY {importance: $importance}]->(f)
+                    """, {
+                        "posting_id": role_id,
+                        "field_name": field_name,
+                        "importance": importance
+                    })
+                    
+                    # Create alternative fields
+                    if alternative_fields:
+                        for alt_field in [f.strip() for f in alternative_fields.split(",") if f.strip()]:
+                            tx.run("""
+                            MERGE (af:FieldOfStudy {name: $alt_field_name, is_alternative: true})
+                            WITH af
+                            MATCH (f:FieldOfStudy {name: $field_name})
+                            CREATE (af)-[:ALTERNATIVE_OF]->(f)
+                            """, {
+                                "alt_field_name": alt_field,
+                                "field_name": field_name
+                            })
+        
+        # Process required skills - using same logic as create transaction
+        if required_skills:
+            for skill in required_skills:
+                if isinstance(skill, dict) and 'name' in skill and skill['name'].strip():
+                    skill_name = skill['name'].strip().lower()
+                    importance = skill.get('importance', 'required')
+                    minimum_years = skill.get('minimum_years', 0)
+                    alt_names = skill.get('alternative_names', '')
+                    
+                    tx.run("""
+                    MERGE (s:Skill {name: $skill_name})
+                    WITH s
+                    MATCH (jp:JobPosting {id: $posting_id})
+                    CREATE (jp)-[rel:REQUIRES_SKILL {
+                        importance: $importance, 
+                        is_required: $is_required,
+                        minimum_years: $minimum_years
+                    }]->(s)
+                    """, {
+                        "posting_id": role_id,
+                        "skill_name": skill_name,
+                        "importance": importance,
+                        "is_required": importance == "required",
+                        "minimum_years": minimum_years
+                    })
+                    
+                    # Process alternative skill names
+                    if alt_names:
+                        for alt_name in [n.strip() for n in alt_names.split(",") if n.strip()]:
+                            tx.run("""
+                            MERGE (as:Skill {name: $alt_name, is_alternative: true})
+                            WITH as
+                            MATCH (s:Skill {name: $skill_name})
+                            CREATE (as)-[:ALTERNATIVE_OF]->(s)
+                            """, {
+                                "alt_name": alt_name,
+                                "skill_name": skill_name
+                            })
+        
+        # Create REQUIRES_EXPERIENCE relationship - same as in create transaction
+        if job_title and total_experience_years:
+            tx.run("""
+            MERGE (e:Experience {title: $job_title})
+            WITH e
+            MATCH (jp:JobPosting {id: $posting_id})
+            CREATE (jp)-[:REQUIRES_EXPERIENCE {years: $total_experience_years}]->(e)
+            """, {
+                "posting_id": role_id,
+                "job_title": job_title,
+                "total_experience_years": total_experience_years
+            })
+            
+            if alternative_titles:
+                for alt_title in [t.strip() for t in alternative_titles.split(",") if t.strip()]:
+                    tx.run("""
+                    MERGE (e:Experience {title: $alt_title})
+                    WITH e
+                    MATCH (jp:JobPosting {id: $posting_id})
+                    CREATE (jp)-[:REQUIRES_EXPERIENCE {years: $total_experience_years}]->(e)
+                    """, {
+                        "posting_id": role_id,
+                        "alt_title": alt_title,
+                        "total_experience_years": total_experience_years
+                    })
+        
+        # Add keywords
+        if keywords:
+            for keyword in [k.strip() for k in keywords.split(",") if k.strip()]:
+                tx.run("""
+                MERGE (k:Keyword {name: $keyword})
+                WITH k
+                MATCH (jp:JobPosting {id: $posting_id})
+                CREATE (jp)-[:HAS_KEYWORD]->(k)
+                """, {
+                    "posting_id": role_id,
+                    "keyword": keyword
+                })
+        
+        return True
+    
+    def _create_or_update_role_transaction(
+        self, 
+        tx: Transaction, 
+        role_id: str, 
+        job_title: str, 
+        alternative_titles: Optional[str] = None, 
+        degree_requirement: Optional[str] = None, 
+        fields_of_study: Optional[List[Dict[str, Any]]] = None, 
+        total_experience_years: int = 0, 
+        required_skills: Optional[List[Dict[str, Any]]] = None,
+        location: Optional[str] = None, 
+        remote_option: Optional[bool] = False, 
+        industry_sector: Optional[str] = None, 
+        role_level: Optional[str] = None,
+        keywords: Optional[str] = None
+    ) -> bool:
+        """
+        Create a new role or update an existing one in Neo4j
+        
+        This function checks if the role exists and delegates to the appropriate
+        create or update transaction method.
+        """
+        # Check if the job posting already exists
+        check_result = tx.run(
+            "MATCH (j:JobPosting {id: $posting_id}) RETURN count(j) as count",
+            {"posting_id": role_id}
+        ).single()
+        
+        # Determine whether to create or update
+        if check_result and check_result["count"] > 0:
+            # Role exists, update it
+            logger.info(f"Updating existing role with ID {role_id}")
+            return self._update_role_transaction(
+                tx, 
+                role_id, 
+                job_title,
+                alternative_titles,
+                degree_requirement,
+                fields_of_study,
+                total_experience_years,
+                required_skills,
+                location,
+                remote_option,
+                industry_sector,
+                role_level,
+                keywords
+            )
+        else:
+            # Role doesn't exist, create it
+            logger.info(f"Creating new role with ID {role_id}")
+            return self._create_role_transaction(
+                tx, 
+                role_id, 
+                job_title,
+                alternative_titles,
+                degree_requirement,
+                fields_of_study,
+                total_experience_years,
+                required_skills,
+                location,
+                remote_option,
+                industry_sector,
+                role_level,
+                keywords
+            )

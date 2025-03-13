@@ -16,6 +16,7 @@ First, design the Neo4j graph to represent the key entities and their relationsh
 - **JobPosting**: Represents a job listing. Properties: title, description, posting_text, posting_embedding.
 - **Skill**: Represents a specific skill (e.g., "python," "project management").
 - **Experience**: Represents a candidate's work experience . Properties: job_title
+- **Keyword**: Represents keywords related to the job posting or candidate CV. 
 
 
 
@@ -24,6 +25,8 @@ First, design the Neo4j graph to represent the key entities and their relationsh
 - **JobPosting -[:REQUIRES_SKILL]-> Skill**: Connects a job to its required skills.
 - **Candidate -[:HAS_EXPERIENCE]-> Experience**: Links a candidate to their experience.Properties: experience_in_years,company_name
 - **JobPosting -[:REQUIRES_EXPERIENCE]-> ExperienceLevel**: Specifies the experience level a job requires. Properties: experience_in_years (e.g., "5").
+- **JobPosting -[:HAS_KEYWORD]-> Keywords**: Connects a job to its keywords. Properties: keyword (e.g., "python")
+- **Candidate -[:HAS_KEYWORD]-> Keyword**: Connects a candidate to their keywords. Properties: keyword (e.g., "python")
 
 ### Purpose
 These nodes and relationships allow you to filter candidates who meet the job's hard requirements using graph queries. For example, you can find candidates with specific skills or experience levels.

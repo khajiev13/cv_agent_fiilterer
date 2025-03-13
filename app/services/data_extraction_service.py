@@ -182,8 +182,8 @@ class DataExtractionService:
             IMPORTANT:
             1. ALL text values MUST be lowercase
             2. Format JSON arrays exactly as shown with proper syntax
-            3. Include at least 3 alternative job titles
-            4. Include at least 3 required skills
+            3. Include as many job titles
+            4. Include as many required skills
             5. For each skill and field of study, provide alternative names/fields
             6. Use "any" for degree_requirement ONLY if no specific requirement is mentioned
             7. Include all relevant fields of study, not just one
