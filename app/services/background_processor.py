@@ -145,29 +145,24 @@ class CVProcessorService:
                 
             # Extract structured data from CV
             cv_data = await self.data_extraction_service.extract_cv_data(cv_text, cv_filename)
-            logger.info(f"The extraction is successfule. Data: {cv_data}")
+            logger.info(f"The extraction is successful. Data: {cv_data}")
             
-            # # Store data in Neo4j database
-            # if cv_data and isinstance(cv_data, dict) and cv_data.get("person"):
-            #     # Store person data
-            #     person = cv_data.get("person")
-            #     person_id = await self.neo4j_service.create_person_node(person)
-                
-            #     # Store experiences
-            #     if cv_data.get("experiences") and cv_data["experiences"].experiences:
-            #         for exp in cv_data["experiences"].experiences:
-            #             await self.neo4j_service.create_experience_relationship(person_id, exp)
-                
-            #     # Store skills
-            #     if cv_data.get("skills") and cv_data["skills"].skills:
-            #         for skill in cv_data["skills"].skills:
-            #             await self.neo4j_service.create_skill_relationship(person_id, skill)
-                
-            #     logger.info(f"Successfully processed and stored CV: {display_name}")
-            #     return True
-            # else:
-            #     logger.error(f"Failed to extract data from CV: {display_name}")
-            #     return False
+            # Generate a unique candidate ID based on filename
+            candidate_id = os.path.splitext(cv_filename)[0]  # Remove file extension
+            
+            # Add candidate to Neo4j
+            success = self.neo4j_service.add_candidate(
+                candidate_id=candidate_id,
+                person_data=cv_data['person'],
+                experiences=cv_data['experiences'],
+                skills=cv_data['skills']
+            )
+            
+            if success:
+                logger.info(f"Successfully added candidate {cv_data['person'].cv_file_address} to Neo4j")
+            else:
+                logger.error(f"Failed to add candidate {cv_data['person'].cv_file_address} to Neo4j")
+            return success
                 
         except Exception as e:
             logger.error(f"Error processing CV {display_name}: {e}", exc_info=True)

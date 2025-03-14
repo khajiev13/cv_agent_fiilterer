@@ -1,19 +1,15 @@
 import os
 import logging
-from typing import List, Dict, Any, Optional, Union, Tuple, cast
-from neo4j import GraphDatabase, Session, Transaction
+from typing import List, Dict, Any, Optional
+from neo4j import GraphDatabase, Transaction
 from dotenv import load_dotenv
 import re
-from string import Template
-from pathlib import Path
-import json
-import datetime
-
-# Import Pydantic models
 from app.pyd_models.models import (
-    JobPostingData, SkillRequirement, FieldOfStudy
+    PersonEntityWithMetadata,
+    ResponseExperiences,
+    ResponseSkills,
+    JobPostingData
 )
-
 # Load environment variables
 load_dotenv()
 
@@ -683,3 +679,132 @@ class Neo4jService:
                 role_level,
                 keywords
             )
+        
+    def add_candidate(
+        self,
+        candidate_id: str,
+        person_data: PersonEntityWithMetadata,
+        experiences: ResponseExperiences,
+        skills: ResponseSkills
+    ) -> bool:
+        if not self.connect():
+            return False
+        
+        try:
+            with self.driver.session() as session:
+                session.execute_write(
+                    self._create_candidate_transaction,
+                    candidate_id,
+                    person_data,
+                    experiences,
+                    skills
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Error adding candidate: {e}")
+            return False
+        
+    def _create_candidate_transaction(
+        self,
+        tx: Transaction,
+        candidate_id: str,
+        person_data: PersonEntityWithMetadata,
+        experiences: ResponseExperiences,
+        skills: ResponseSkills
+    ) -> bool:
+        
+        # Create Candidate node
+        tx.run("""
+        MERGE (c:Candidate {id: $candidate_id})
+        SET c.name = $name,
+            c.job_title = $job_title,
+            c.description = $description,
+            c.last_field_of_study = $last_field_of_study,
+            c.last_degree = $last_degree,
+            c.cv_text = $cv_text,
+            c.cv_file_address = $cv_file_address,
+            c.created_at = datetime()
+        """, {
+            "candidate_id": candidate_id,
+            "name": person_data.name,
+            "job_title": person_data.job_title,
+            "description": person_data.description,
+            "last_field_of_study": person_data.last_field_of_study,
+            "last_degree": person_data.last_degree,
+            "cv_text": person_data.cv_text,
+            "cv_file_address": person_data.cv_file_address
+        })
+        
+        # Create FieldOfStudy node and relationship
+        if person_data.last_field_of_study:
+            tx.run("""
+            MERGE (f:FieldOfStudy {name: $field_name})
+            WITH f
+            MATCH (c:Candidate {id: $candidate_id})
+            MERGE (c)-[:HAS_FIELD_OF_STUDY {degree: $degree}]->(f)
+            """, {
+            "candidate_id": candidate_id,
+            "field_name": person_data.last_field_of_study.lower(),
+            "degree": person_data.last_degree if person_data.last_degree else ""
+            })
+        
+        for exp in experiences.experience:  # Changed from "experiences" to "experiences.experience"
+            tx.run("""
+            MERGE (e:Experience {title: $job_title})
+            WITH e
+            MATCH (c:Candidate {id: $candidate_id})
+            CREATE (c)-[:HAS_EXPERIENCE {
+            years: $experience_years,
+            company: $company_name,
+            description: $description
+            }]->(e)
+            """, {
+            "candidate_id": candidate_id,
+            "job_title": exp.job_title.lower() if exp.job_title else "",
+            "experience_years": exp.experience_in_years if exp.experience_in_years else 0,
+            "company_name": exp.company_name if exp.company_name else "",
+            "description": exp.description if exp.description else ""
+            })
+            
+            # Add alternative job titles
+            if exp.alternative_job_titles:
+                for alt_title in [t.strip() for t in exp.alternative_job_titles.split(",") if t.strip()]:
+                    tx.run("""
+                    MERGE (ae:Experience {title: $alt_title})
+                    WITH ae
+                    MATCH (e:Experience {title: $job_title})
+                    MERGE (ae)-[:ALTERNATIVE_OF]->(e)
+                    """, {
+                    "alt_title": alt_title.lower(),
+                    "job_title": exp.job_title.lower() if exp.job_title else ""
+                    })
+        
+        # Process skills - Access the skills list correctly
+        for skill in skills.skills:  # Changed from "skills" to "skills.skills"
+            tx.run("""
+            MERGE (s:Skill {name: $skill_name})
+            WITH s
+            MATCH (c:Candidate {id: $candidate_id})
+            CREATE (c)-[:HAS_SKILL {
+            level: $level,
+            years: $years
+            }]->(s)
+            """, {
+            "candidate_id": candidate_id,
+            "skill_name": skill.name.lower() if skill.name else "",
+            "level": skill.level if skill.level else "beginner",
+            "years": skill.years_experience if skill.years_experience else 0
+            })
+            
+            # Add alternative skill names
+            if skill.alternative_names:
+                for alt_name in [n.strip() for n in skill.alternative_names.split(",") if n.strip()]:
+                    tx.run("""
+                    MERGE (as:Skill {name: $alt_name, is_alternative: true})
+                    WITH as
+                    MATCH (s:Skill {name: $skill_name})
+                    MERGE (as)-[:ALTERNATIVE_OF]->(s)
+                    """, {
+                    "alt_name": alt_name.lower(),
+                    "skill_name": skill.name.lower() if skill.name else ""
+                    })

@@ -222,9 +222,7 @@ class DataExtractionService:
                 self.person_model
             )
 
-            logger.info(f"Person data: {person_data}")
-            logger.info(f"Person data type: {type(person_data)}")
-            logger.info(f"Person data attributes: {dir(person_data)}")            
+            logger.info(f"Person data: {person_data}")    
             experience_data = await self.extract_entities(
                 self.experience_prompt_tpl,
                 cv_text, 
