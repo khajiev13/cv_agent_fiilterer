@@ -687,6 +687,8 @@ class Neo4jService:
         experiences: ResponseExperiences,
         skills: ResponseSkills
     ) -> bool:
+        logger.info(f"Attempting to add candidate with metadata: {person_data}")
+
         if not self.connect():
             return False
         

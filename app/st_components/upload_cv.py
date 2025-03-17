@@ -3,54 +3,58 @@ from app.utils.file_utils import save_uploaded_file
 import time
 import uuid
 import os
-import asyncio
 from datetime import datetime
 from services.neo4j_service import Neo4jService
 from services.background_processor import CVProcessorService
 import threading
 
-default_workers = min(32, os.cpu_count() * 3)  
+# Calculate default workers
+default_workers = min(32, (os.cpu_count() or 4) * 3)  
 
-# Create a global processor service with desired number of workers
-cv_processor = CVProcessorService(max_workers=default_workers)  
-
-# Function to run background processing in a separate thread
-def start_background_processing():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(cv_processor.start_background_processing())
-    loop.close()
-
-def stop_background_processing():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(cv_processor.stop_background_processing())
-    loop.close()
-
-def show_upload_cv(neo4j_service:Neo4jService):
+def show_upload_cv(neo4j_service: Neo4jService):
+    # Initialize session state variables if they don't exist
+    if 'cv_processor' not in st.session_state:
+        processor = CVProcessorService(max_workers=default_workers)
+        processor.start()  # Start the thread immediately
+        st.session_state.cv_processor = processor
+        st.session_state.shutdown_registered = False
+    
+    cv_processor = st.session_state.cv_processor
+    
+    # Add a way to properly shut down the processor when the app ends
+    # Check if shutdown_registered exists AND is False
+    if not st.session_state.get("shutdown_registered", False):
+        # Register this in session state so we only do it once
+        def _on_session_end():
+            if hasattr(cv_processor, 'shutdown'):
+                cv_processor.shutdown()
+        
+        st.session_state.on_session_end = _on_session_end
+        st.session_state.shutdown_registered = True
+    
     st.header("📤 Upload CVs", divider="rainbow")
     
-    # Display processing status
+    # Display processing status with refresh button
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         st.metric("Queue Size", cv_processor.get_queue_size())
     with col2:
         st.metric("Processing Active", "Yes" if cv_processor.is_processing else "No")
     with col3:
+        if st.button("🔄 Refresh Status"):
+            st.rerun()
+            
+    # Add control buttons for the processor
+    col1, col2 = st.columns(2)
+    with col1:
         if cv_processor.is_processing:
-            if st.button("⏹️ Stop Processing", use_container_width=True):
-                stop_background_processing()
-                st.success("Processing stopped!")
+            if st.button("⏹️ Stop Processor"):
+                cv_processor.shutdown()
+                st.success("Processor shutting down...")
+                time.sleep(0.5)
                 st.rerun()
-        else:
-            if st.button("▶️ Start Processing", use_container_width=True):
-                thread = threading.Thread(target=start_background_processing)
-                thread.daemon = True
-                thread.start()
-                st.success("Processing started!")
-                time.sleep(0.5)  # Brief pause to let thread initialize
-                st.rerun()
-    
+                
+    # File uploader section (existing code)
     with st.container():
         uploaded_files = st.file_uploader(
             "Choose CV files", 
@@ -59,6 +63,7 @@ def show_upload_cv(neo4j_service:Neo4jService):
             help="Supported formats: PDF, DOCX, DOC"
         )
     
+    # Rest of your existing upload code remains the same
     if uploaded_files:
         st.info(f"{len(uploaded_files)} file(s) selected for upload")
         
@@ -69,7 +74,13 @@ def show_upload_cv(neo4j_service:Neo4jService):
         
         col1, col2 = st.columns([1, 3])
         with col1:
-            upload_button = st.button("📤 Upload Selected CVs", use_container_width=True, type="primary")
+            # Disable the upload button if processor isn't running
+            upload_button = st.button(
+                "📤 Upload Selected CVs", 
+                use_container_width=True, 
+                type="primary",
+                disabled=not cv_processor.is_processing
+            )
             
         if upload_button:
             with st.status("Uploading files...", expanded=True) as status:
@@ -102,16 +113,8 @@ def show_upload_cv(neo4j_service:Neo4jService):
                 
                 if success_count == total_files:
                     status.update(label=f"✅ Added {success_count} CV(s) to processing queue!", state="complete")
-                    
-                    # Ensure background processing is running
-                    if not cv_processor.is_processing:
-                        st.info("Starting CV processing in the background.")
-                        thread = threading.Thread(target=start_background_processing)
-                        thread.daemon = True
-                        thread.start()
-                    
+
                     st.success(f"CV processing queue: {cv_processor.get_queue_size()} files")
-                    st.balloons()
                 else:
                     status.update(label=f"Queued {success_count} of {total_files} CV(s)", state="complete")
                 
@@ -119,11 +122,3 @@ def show_upload_cv(neo4j_service:Neo4jService):
                 st.session_state.clear_file_uploader = True
     else:
         st.info("Drag and drop CV files here or click to browse")
-
-    # Show extraction status
-    if st.button("Check Extraction Status"):
-        unextracted = neo4j_service.get_unextracted_cvs()
-        if unextracted:
-            st.warning(f"There are {len(unextracted)} CVs still being processed.")
-        else:
-            st.success("All CVs have been processed!")
