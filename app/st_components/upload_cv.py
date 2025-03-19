@@ -12,12 +12,11 @@ import threading
 default_workers = min(32, (os.cpu_count() or 4) * 3)  
 
 def show_upload_cv(neo4j_service: Neo4jService):
-    # Initialize session state variables if they don't exist
+    # Initialize CV processor
     if 'cv_processor' not in st.session_state:
-        processor = CVProcessorService(max_workers=default_workers)
-        processor.start()  # Start the thread immediately
+        processor = CVProcessorService()
+        processor.start()
         st.session_state.cv_processor = processor
-        st.session_state.shutdown_registered = False
     
     cv_processor = st.session_state.cv_processor
     
@@ -82,15 +81,20 @@ def show_upload_cv(neo4j_service: Neo4jService):
                 disabled=not cv_processor.is_processing
             )
             
+        # UNCHANGED: Keep the initialization and UI section the same
+
+        # Change the upload_button handler to immediately process CVs
         if upload_button:
-            with st.status("Uploading files...", expanded=True) as status:
-                success_count = 0
+            with st.status("Processing files...", expanded=True) as status:
+                queued_count = 0
+                processed_count = 0
                 total_files = len(uploaded_files)
                 
                 progress_bar = st.progress(0)
                 
+                # Step 1: Queue all files first
                 for i, uploaded_file in enumerate(uploaded_files):
-                    st.write(f"Processing: {uploaded_file.name}")
+                    st.write(f"Queueing: {uploaded_file.name}")
                     
                     # Generate a unique ID and create unique filename
                     unique_id = str(uuid.uuid4())
@@ -100,25 +104,40 @@ def show_upload_cv(neo4j_service: Neo4jService):
                     # Save the file with unique filename
                     file_name, file_path = save_uploaded_file(uploaded_file, unique_file_name)
                     
-                    #Pass the file name and content to background processor
+                    # Pass the file name and content to background processor
                     cv_processor.add_cv_to_queue(file_name, unique_file_name, file_path)
-                    success_count += 1
+                    queued_count += 1
                     
-                    # Update progress
-                    progress = (i + 1) / total_files
+                    # Update progress for queueing phase (50% of total progress)
+                    progress = ((i + 1) / total_files) * 0.5
                     progress_bar.progress(progress)
-                    time.sleep(0.1)  # Small delay for visual feedback
+                    time.sleep(0.05)  # Small delay for visual feedback
 
+                st.write(f"Added {queued_count} CV(s) to processing queue")
+                
+                # Step 2: Process all files immediately
+                st.write("Processing files... (this may take time)")
+                status.update(label="Processing CV files...", state="running")
+                
+                # Process all CVs at once
+                processed_count = cv_processor.process_all_cvs()
+                
+                # Update progress to 100%
+                progress_bar.progress(1.0)
+                time.sleep(0.5)  # Brief pause for UX
                 progress_bar.empty()
                 
-                if success_count == total_files:
-                    status.update(label=f"✅ Added {success_count} CV(s) to processing queue!", state="complete")
-
-                    st.success(f"CV processing queue: {cv_processor.get_queue_size()} files")
+                # Show final status
+                if processed_count == total_files:
+                    status.update(label=f"✅ Successfully processed {processed_count} CV(s)!", state="complete")
+                    st.success(f"All {processed_count} CV(s) were processed and added to the database")
                 else:
-                    status.update(label=f"Queued {success_count} of {total_files} CV(s)", state="complete")
+                    status.update(label=f"⚠️ Processed {processed_count} of {total_files} CV(s)", state="error")
+                    st.warning(f"Some files failed to process. Check logs for details.")
                 
-                # Reset the file uploader after successful upload
-                st.session_state.clear_file_uploader = True
+                # Check if any files remain in the queue
+                remaining = cv_processor.get_queue_size()
+                if remaining > 0:
+                    st.warning(f"{remaining} files remain in the queue")
     else:
         st.info("Drag and drop CV files here or click to browse")

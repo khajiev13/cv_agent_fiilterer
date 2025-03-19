@@ -110,7 +110,7 @@ class DataExtractionService:
         """Clean text to remove non-ASCII characters"""
         return re.sub(r'[^\x00-\x7F]+', ' ', text)
 
-    def extract_entities(self, prompt_template, cv_text, model):
+    async def extract_entities(self, prompt_template, cv_text, model):
         """
         Extract entities from CV text using LangChain's structured output
         
@@ -127,7 +127,7 @@ class DataExtractionService:
             prompt = Template(prompt_template).substitute(ctext=self.clean_text(cv_text))
             
             # Call the model with structured output
-            result =  model.ainvoke(prompt)
+            result = await model.ainvoke(prompt)
             return result
             
         except Exception as e:
@@ -201,7 +201,7 @@ class DataExtractionService:
             logger.error(f"Error extracting job posting information: {e}")
             return JobPostingData()  # Return empty object on error
         
-    def extract_cv_data(self, cv_text, cv_filename=None):
+    async def extract_cv_data(self, cv_text, cv_filename=None):
         """
         Extract structured data from a CV using LangChain models
         
@@ -216,21 +216,21 @@ class DataExtractionService:
         
         try:
             # Extract all entities with LangChain structured output models
-            person_data = self.extract_entities(
+            person_data = await self.extract_entities(
                 self.candidate_prompt_tpl,
                 cv_text,
                 self.person_model
             )
 
             logger.info(f"Person data: {person_data}")    
-            experience_data = self.extract_entities(
+            experience_data = await self.extract_entities(
                 self.experience_prompt_tpl,
                 cv_text, 
                 self.position_model
             )
             logger.info(f"Experience data: {experience_data}")
             
-            skill_data = self.extract_entities(
+            skill_data = await self.extract_entities(
                 self.skills_prompt_tpl,
                 cv_text, 
                 self.skill_model

@@ -721,7 +721,6 @@ class Neo4jService:
         SET c.name = $name,
             c.job_title = $job_title,
             c.description = $description,
-            c.last_field_of_study = $last_field_of_study,
             c.last_degree = $last_degree,
             c.cv_text = $cv_text,
             c.cv_file_address = $cv_file_address,
@@ -731,7 +730,6 @@ class Neo4jService:
             "name": person_data.name,
             "job_title": person_data.job_title,
             "description": person_data.description,
-            "last_field_of_study": person_data.last_field_of_study,
             "last_degree": person_data.last_degree,
             "cv_text": person_data.cv_text,
             "cv_file_address": person_data.cv_file_address
