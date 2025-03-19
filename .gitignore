@@ -46,5 +46,4 @@ uploads/
 tmp/
 
 # Any other directories storing uploaded CV files
-cv_uploads/
-resumes/
+data/
