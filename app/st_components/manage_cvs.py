@@ -5,12 +5,11 @@ import json
 from datetime import datetime
 from services.neo4j_service import Neo4jService
 import os
-from utils.file_utils import delete_cv_file, CV_DATA_DIR, delete_cv_file
-
+from utils.file_utils import delete_cv_file, CV_DATA_DIR
 
 
 def show_manage_cvs(neo4j_service:Neo4jService):
-    st.header("📋 Manage CVs", divider="rainbow")
+    st.header("📋 Manage Candidates", divider="rainbow")
     
     # Initialize session states
     if 'confirm_delete' not in st.session_state:
@@ -22,17 +21,20 @@ def show_manage_cvs(neo4j_service:Neo4jService):
     if 'selected_ids' not in st.session_state:
         st.session_state.selected_ids = []
     
-    if 'view_cv_details' not in st.session_state:
-        st.session_state.view_cv_details = None
+    if 'view_candidate_details' not in st.session_state:
+        st.session_state.view_candidate_details = None
     
-    # Fetch CVs from Neo4j
-    with st.spinner("Loading CVs..."):
-        cvs = []
+    if 'delete_candidate_id' not in st.session_state:
+        st.session_state.delete_candidate_id = None
+        
+    # Fetch candidates from Neo4j
+    with st.spinner("Loading candidates..."):
+        candidates = []
         if neo4j_service and neo4j_service.is_connected():
-            cvs = neo4j_service.get_all_cv_nodes()
+            candidates = neo4j_service.get_all_candidates()
     
-    if not cvs:
-        st.info("No CVs have been uploaded yet.")
+    if not candidates:
+        st.info("No candidates have been added to the database yet.")
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -46,40 +48,29 @@ def show_manage_cvs(neo4j_service:Neo4jService):
             if st.button("🔄 Refresh", use_container_width=True):
                 st.rerun()
         with col3:
-            if st.button("🗑️ Delete All CVs", type="primary", use_container_width=True):
+            if st.button("🗑️ Delete All Candidates", type="primary", use_container_width=True):
                 st.session_state.confirm_delete_all = True
         
         # Handle Delete All confirmation dialog
         if st.session_state.get('confirm_delete_all', False):
-            st.warning("⚠️ This action cannot be undone! Are you sure you want to delete ALL CVs in the system?")
+            st.warning("⚠️ This action cannot be undone! Are you sure you want to delete ALL candidates in the system?")
             confirm_col1, confirm_col2 = st.columns([1, 1])
             
             with confirm_col1:
                 if st.button("✅ Yes, Delete All", type="primary", use_container_width=True):
-                    with st.spinner("Deleting all files..."):
+                    with st.spinner("Deleting all candidates..."):
                         success = False
-                        total_count = len(cvs)
+                        total_count = len(candidates)
                         
                         # Create a progress bar
                         progress_bar = st.progress(0)
                         
-                        # Store file paths before deleting from Neo4j
-                        file_paths_to_delete = []
-                        for cv in cvs:
-                            # Check if file_path exists in the CV node data
-                            if 'file_path' in cv and cv['file_path']:
-                                file_paths_to_delete.append(cv['file_path'])
-                            # If file_path doesn't exist but filename does, construct the path
-                            elif 'filename' in cv or 'file_name' in cv:
-                                filename = cv.get('filename', cv.get('file_name', ''))
-                                if filename:
-                                    file_path = os.path.join(CV_DATA_DIR, filename)
-                                    file_paths_to_delete.append(file_path)
-                        
                         # Delete from Neo4j if connected
+                        file_paths_to_delete = []
                         db_success = False
+                        
                         if neo4j_service and neo4j_service.is_connected():
-                            db_success = neo4j_service.delete_all_cv_nodes()
+                            file_paths_to_delete, db_success = neo4j_service.delete_all_candidates()
                         
                         # Delete physical files
                         file_success = True
@@ -87,26 +78,26 @@ def show_manage_cvs(neo4j_service:Neo4jService):
                         
                         for i, file_path in enumerate(file_paths_to_delete):
                             # Delete the file
-                            
                             if delete_cv_file(file_path):
                                 deleted_count += 1
                             else:
                                 file_success = False
                             
                             # Update progress (weight Neo4j deletion as half the job)
-                            progress = 0.5 + ((i + 1) / len(file_paths_to_delete) * 0.5)
+                            progress = 0.5 + ((i + 1) / len(file_paths_to_delete) * 0.5) if file_paths_to_delete else 1.0
                             progress_bar.progress(progress)
                             time.sleep(0.05)
                         
                         success = db_success and file_success
                         
                         if success:
-                            st.toast(f"Successfully deleted all {total_count} CVs from database and {deleted_count} CV files from disk.")
+                            st.toast(f"Successfully deleted all {total_count} candidates from database and {deleted_count} CV files from disk.")
                             st.session_state.confirm_delete_all = False
                             time.sleep(1)
+                            st.rerun()
                         else:
                             if not db_success:
-                                st.error("Failed to delete CVs from database.")
+                                st.error("Failed to delete candidates from database.")
                             if not file_success:
                                 st.error(f"Failed to delete some CV files. Deleted {deleted_count} of {len(file_paths_to_delete)}.")
             
@@ -115,224 +106,229 @@ def show_manage_cvs(neo4j_service:Neo4jService):
                     st.session_state.confirm_delete_all = False
         
         # Create tabs for different views
-        tab1, tab2 = st.tabs(["📋 All CVs", "📊 Statistics"])
+        tab1, tab2 = st.tabs(["👥 All Candidates", "📊 Statistics"])
         
         with tab1:
             # Prepare data for display
-            df = pd.DataFrame(cvs)
+            df = pd.DataFrame(candidates)
             
-            # Ensure columns exist
-            for col in ['id', 'filename', 'upload_date', 'processed']:
+            # Ensure all necessary columns exist
+            for col in ['id', 'name', 'job_title', 'upload_date', 'has_skills', 'has_experience', 'has_education', 'file_path']:
                 if col not in df.columns:
-                    if col == 'filename' and 'file_name' in df.columns:
-                        df['filename'] = df['file_name']
-                    else:
-                        df[col] = None
+                    df[col] = None
             
             # Rename for display and select relevant columns
-            display_df = df[['id', 'filename', 'upload_date', 'processed']].copy()
-            display_df.columns = ['ID', 'Filename', 'Upload Date', 'Data Extracted']
+            display_df = df[['id', 'name', 'job_title', 'upload_date', 'has_skills', 'has_experience', 'has_education']].copy()
+            display_df.columns = ['ID', 'Name', 'Job Title', 'Upload Date', 'Has Skills', 'Has Experience', 'Has Education']
             
-            # Convert boolean to emoji
-            display_df['Data Extracted'] = display_df['Data Extracted'].apply(lambda x: "✅" if x else "❌")
+            # Convert booleans to emojis
+            for col in ['Has Skills', 'Has Experience', 'Has Education']:
+                display_df[col] = display_df[col].apply(lambda x: "✅" if x else "❌")
             
             # Add filter options
             filter_col1, filter_col2 = st.columns(2)
             
             with filter_col1:
-                filter_filename = st.text_input("Filter by filename", key="filter_filename")
+                filter_name = st.text_input("Filter by name", key="filter_name")
             
             with filter_col2:
-                filter_data_extracted = st.selectbox(
-                    "Filter by data extraction status",
-                    options=["All", "Extracted", "Not Extracted"],
-                    key="filter_data_extracted"
-                )
+                filter_job_title = st.text_input("Filter by job title", key="filter_job_title")
             
             # Apply filters
             filtered_df = display_df.copy()
-            if filter_filename:
-                filtered_df = filtered_df[filtered_df['Filename'].str.contains(filter_filename, case=False)]
+            if filter_name:
+                filtered_df = filtered_df[filtered_df['Name'].str.contains(filter_name, case=False, na=False)]
             
-            if filter_data_extracted == "Extracted":
-                filtered_df = filtered_df[filtered_df['Data Extracted'] == "✅"]
-            elif filter_data_extracted == "Not Extracted":
-                filtered_df = filtered_df[filtered_df['Data Extracted'] == "❌"]
+            if filter_job_title:
+                filtered_df = filtered_df[filtered_df['Job Title'].str.contains(filter_job_title, case=False, na=False)]
             
-            # Display CV count
-            st.caption(f"Showing {len(filtered_df)} of {len(display_df)} CVs")
+            # Display candidate count
+            st.caption(f"Showing {len(filtered_df)} of {len(display_df)} candidates")
+            
+            # Add Action column for individual deletion
+            filtered_df['Action'] = [f"{id}" for id in filtered_df['ID']]
             
             # Data editor with selection
             edited_df = st.data_editor(
                 filtered_df,
                 hide_index=True,
                 column_config={
-                    "ID": st.column_config.TextColumn("ID", help="CV identifier"),
-                    "Filename": st.column_config.TextColumn("Filename", help="Name of the file"),
-                    "Upload Date": st.column_config.DatetimeColumn("Upload Date", help="Date when CV was uploaded", format="DD/MM/YYYY HH:mm"),
-                    "Data Extracted": st.column_config.TextColumn("Data Extracted", help="Whether data has been extracted")
+                    "ID": st.column_config.TextColumn("ID", help="Candidate identifier"),
+                    "Name": st.column_config.TextColumn("Name", help="Candidate name"),
+                    "Job Title": st.column_config.TextColumn("Job Title", help="Current job title"),
+                    "Upload Date": st.column_config.DatetimeColumn("Upload Date", help="Date when candidate was added", format="DD/MM/YYYY HH:mm"),
+                    "Has Skills": st.column_config.TextColumn("Skills", help="Has skill data"),
+                    "Has Experience": st.column_config.TextColumn("Experience", help="Has experience data"),
+                    "Has Education": st.column_config.TextColumn("Education", help="Has education data"),
+                    "Action": st.column_config.CheckboxColumn("Select", help="Select for action")
                 },
                 use_container_width=True,
-                disabled=["ID", "Filename", "Upload Date", "Data Extracted"],
-                key="cv_table"
+                disabled=["ID", "Name", "Job Title", "Upload Date", "Has Skills", "Has Experience", "Has Education"],
+                key="candidates_table"
             )
             
-            # Create a mapping of ID to filename for safe lookups
-            id_to_filename = {}
-            for _, row in filtered_df.iterrows():
-                id_to_filename[row['ID']] = row['Filename']
+            # Process the checkboxes and extract IDs of selected candidates
+            selected_ids = edited_df.loc[edited_df['Action'] == True, 'ID'].tolist()
+            st.session_state.selected_ids = selected_ids
             
-            # Add a multi-select widget to select rows by ID with safe format function
-            selected_ids = st.multiselect(
-                "Select CVs to manage:",
-                options=filtered_df['ID'].tolist(),
-                format_func=lambda x: f"ID: {x} - {id_to_filename.get(x, 'Unknown')}"
-            )
-            
-            # Get the selected rows based on the selected IDs
-            if selected_ids:
-                selected_rows = filtered_df[filtered_df['ID'].isin(selected_ids)].to_dict('records')
-                st.session_state.selected_ids = selected_ids
-                
-                # Show selected CV details in an expander
-                with st.expander("📄 Selected CV Details", expanded=True):
-                    for i, row in enumerate(selected_rows):
-                        st.markdown(f"**CV #{i+1}: {row['Filename']}**")
-                        st.markdown(f"- **ID:** {row['ID']}")
-                        st.markdown(f"- **Upload Date:** {row['Upload Date']}")
-                        st.markdown(f"- **Data Extraction Status:** {row['Data Extracted']}")
-                        
-                        # View details button
-                        button_key = f"details_{row['ID'] if row['ID'] is not None else f'unknown_{i}'}"
-                        if st.button(f"🔍 View Details", key=button_key):
-                            st.session_state.view_cv_details = row['ID']
-                            st.rerun()
-                            
-                        if i < len(selected_rows) - 1:
-                            st.divider()
-                
-                col1, col2 = st.columns([1, 5])
-                with col1:
-                    if st.button(f"🗑️ Delete Selected ({len(selected_ids)} CVs)", type="primary", use_container_width=True):
-                        st.session_state.confirm_delete = True
-                
+            # Individual row delete buttons
+            for i, row in filtered_df.iterrows():
+                col1, col2, col3 = st.columns([10, 1, 1])
                 with col2:
-                    if st.session_state.get('confirm_delete', False):
-                        st.warning("⚠️ This action cannot be undone! Are you sure you want to delete the selected CVs?")
-                        confirm_col1, confirm_col2 = st.columns([1, 1])
-                        
-                        with confirm_col1:
-                            if st.button("✅ Yes, Delete", type="primary", use_container_width=True):
-                                with st.spinner("Deleting files..."):
-                                    success_count = 0
-                                    
-                                    # Create a progress bar
-                                    progress_bar = st.progress(0)
-                                    
-                                    for i, cv_id in enumerate(selected_ids):
-                                        # Delete from Neo4j if connected
-                                        if neo4j_service and neo4j_service.is_connected():
-                                            if neo4j_service.delete_cv_node(cv_id):
-                                                success_count += 1
-                                        
-                                        # Update progress
-                                        progress = (i + 1) / len(selected_ids)
-                                        progress_bar.progress(progress)
-                                        time.sleep(0.1)
-                                    
-                                    if success_count:
-                                        st.toast(f"Successfully deleted {success_count} CVs.")
-                                        st.session_state.confirm_delete = False
-                                        time.sleep(1)
-                                        st.rerun()
-                                    else:
-                                        st.error("Failed to delete the selected CVs.")
-                        
-                        with confirm_col2:
-                            if st.button("❌ Cancel", use_container_width=True):
-                                st.session_state.confirm_delete = False
+                    if st.button("🔍", key=f"view_{row['ID']}"):
+                        st.session_state.view_candidate_details = row['ID']
+                        st.rerun()
+                with col3:
+                    if st.button("🗑️", key=f"delete_{row['ID']}"):
+                        st.session_state.delete_candidate_id = row['ID']
+                        st.rerun()
+            
+            # Handle individual candidate deletion
+            if st.session_state.delete_candidate_id:
+                candidate_id = st.session_state.delete_candidate_id
+                st.warning(f"⚠️ Are you sure you want to delete this candidate? This action cannot be undone.")
+                
+                confirm_col1, confirm_col2 = st.columns([1, 1])
+                with confirm_col1:
+                    if st.button("✅ Yes, Delete", type="primary", key=f"confirm_delete_{candidate_id}", use_container_width=True):
+                        with st.spinner("Deleting candidate..."):
+                            # Get file path and delete from Neo4j
+                            file_path, db_success = neo4j_service.delete_candidate(candidate_id)
+                            
+                            # Delete CV file if file path exists
+                            file_success = True
+                            if file_path and os.path.exists(file_path):
+                                file_success = delete_cv_file(file_path)
+                            
+                            if db_success:
+                                st.toast(f"Successfully deleted candidate {candidate_id}")
+                                st.session_state.delete_candidate_id = None
+                                time.sleep(1)
                                 st.rerun()
+                            else:
+                                st.error("Failed to delete candidate from database.")
+                
+                with confirm_col2:
+                    if st.button("❌ Cancel", key=f"cancel_delete_{candidate_id}", use_container_width=True):
+                        st.session_state.delete_candidate_id = None
+                        st.rerun()
+            
+            # Batch deletion section - only show if candidates are selected
+            if selected_ids:
+                st.divider()
+                st.subheader(f"Selected Candidates: {len(selected_ids)}")
+                
+                # Show list of selected candidates
+                selected_names = filtered_df[filtered_df['ID'].isin(selected_ids)][['Name', 'Job Title']].values.tolist()
+                for name, job_title in selected_names:
+                    st.write(f"• {name}: {job_title}")
+                
+                if st.button(f"🗑️ Delete {len(selected_ids)} Selected Candidates", type="primary"):
+                    st.session_state.confirm_delete = True
+                
+                # Confirmation for batch deletion
+                if st.session_state.confirm_delete:
+                    st.warning("⚠️ This will delete all selected candidates and their CV files. This action cannot be undone!")
+                    confirm_col1, confirm_col2 = st.columns([1, 1])
+                    
+                    with confirm_col1:
+                        if st.button("✅ Yes, Delete Selected", type="primary", use_container_width=True):
+                            with st.spinner("Deleting selected candidates..."):
+                                success_count = 0
+                                file_success_count = 0
+                                
+                                # Create a progress bar
+                                progress_bar = st.progress(0)
+                                
+                                for i, candidate_id in enumerate(selected_ids):
+                                    # Delete from Neo4j
+                                    file_path, db_success = neo4j_service.delete_candidate(candidate_id)
+                                    
+                                    if db_success:
+                                        success_count += 1
+                                        
+                                        # Delete CV file
+                                        if file_path and os.path.exists(file_path):
+                                            if delete_cv_file(file_path):
+                                                file_success_count += 1
+                                    
+                                    # Update progress
+                                    progress = (i + 1) / len(selected_ids)
+                                    progress_bar.progress(progress)
+                                    time.sleep(0.1)
+                                
+                                if success_count > 0:
+                                    st.toast(f"Successfully deleted {success_count} candidates and {file_success_count} CV files.")
+                                    st.session_state.confirm_delete = False
+                                    st.session_state.selected_ids = []
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to delete the selected candidates.")
+                    
+                    with confirm_col2:
+                        if st.button("❌ Cancel", use_container_width=True):
+                            st.session_state.confirm_delete = False
+                            st.rerun()
         
         with tab2:
             # Show statistics
-            st.subheader("CV Statistics")
+            st.subheader("Candidate Statistics")
             
             # Calculate statistics
-            total_cvs = len(df)
-            extracted_cvs = len(df[df['processed'] == True]) if 'processed' in df.columns else 0
-            not_extracted_cvs = total_cvs - extracted_cvs
+            total_candidates = len(df)
+            candidates_with_skills = len(df[df['has_skills'] == True]) if 'has_skills' in df.columns else 0
+            candidates_with_experience = len(df[df['has_experience'] == True]) if 'has_experience' in df.columns else 0
+            candidates_with_education = len(df[df['has_education'] == True]) if 'has_education' in df.columns else 0
             
             # Display metrics
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total CVs", total_cvs)
-            col2.metric("Processed CVs", extracted_cvs)
-            col3.metric("Pending CVs", not_extracted_cvs)
+            col1, col2 = st.columns(2)
+            col1.metric("Total Candidates", total_candidates)
+            col2.metric("With Skills", candidates_with_skills)
+            col3, col4 = st.columns(2)
+            col3.metric("With Experience", candidates_with_experience)
+            col4.metric("With Education", candidates_with_education)
             
-            # Add a chart
-            if total_cvs > 0:
-                st.subheader("Processing Status")
+            # Add charts
+            if total_candidates > 0:
+                # Skills chart
+                st.subheader("Candidate Information Completeness")
                 chart_data = pd.DataFrame({
-                    'Status': ['Processed', 'Pending'],
-                    'Count': [extracted_cvs, not_extracted_cvs]
+                    'Category': ['With Skills', 'With Experience', 'With Education'],
+                    'Count': [candidates_with_skills, candidates_with_experience, candidates_with_education]
                 })
                 st.bar_chart(
                     chart_data, 
-                    x='Status', 
+                    x='Category', 
                     y='Count',
                     color='#4776E6'  
                 )
 
-        # Handle CV details view
-        if st.session_state.view_cv_details:
-            cv_id = st.session_state.view_cv_details
-            cv_details = next((cv for cv in cvs if cv['id'] == cv_id), None)
+        # Handle candidate details view
+        if st.session_state.view_candidate_details:
+            candidate_id = st.session_state.view_candidate_details
+            # Find the candidate in our DataFrame
+            candidate = df[df['id'] == candidate_id].iloc[0].to_dict() if any(df['id'] == candidate_id) else None
             
-            if cv_details:
-                st.sidebar.subheader(f"📄 CV Details")
-                st.sidebar.write(f"**Filename:** {cv_details.get('filename', cv_details.get('file_name', 'Unknown'))}")
-                st.sidebar.write(f"**Upload Date:** {cv_details.get('upload_date', 'Unknown')}")
-                st.sidebar.write(f"**Processed:** {'Yes' if cv_details.get('processed', False) else 'No'}")
+            if candidate:
+                st.sidebar.header(f"Candidate Details")
+                st.sidebar.write(f"**Name:** {candidate.get('name', 'Unknown')}")
+                st.sidebar.write(f"**Job Title:** {candidate.get('job_title', 'Unknown')}")
+                st.sidebar.write(f"**Added On:** {candidate.get('upload_date', 'Unknown')}")
                 
-                if 'file_path' in cv_details and cv_details['file_path']:
-                    st.sidebar.write(f"**File Path:** {cv_details['file_path']}")
+                # Show file path if available
+                if candidate.get('file_path'):
+                    st.sidebar.write(f"**CV File:** {os.path.basename(candidate['file_path'])}")
                 
-                # Show extracted data if available
-                extraction_data = cv_details.get('extraction_data', {})
-                if extraction_data:
-                    try:
-                        if isinstance(extraction_data, str):
-                            extraction_data = json.loads(extraction_data)
-                        
-                        st.sidebar.subheader("Extracted Data")
-                        
-                        # Show entities 
-                        if "entities" in extraction_data:
-                            entities = extraction_data["entities"]
-                            
-                            # Group entities by label
-                            entity_groups = {}
-                            for entity in entities:
-                                label = entity.get("label", "Unknown")
-                                if label not in entity_groups:
-                                    entity_groups[label] = []
-                                entity_groups[label].append(entity)
-                            
-                            # Create tabs for different entity types
-                            if entity_groups:
-                                tabs = st.sidebar.tabs(list(entity_groups.keys()))
-                                
-                                for i, (label, entities) in enumerate(entity_groups.items()):
-                                    with tabs[i]:
-                                        for entity in entities:
-                                            st.write(f"**ID:** {entity.get('id', 'Unknown')}")
-                                            for key, value in entity.items():
-                                                if key not in ["id", "label"]:
-                                                    st.write(f"**{key.capitalize()}:** {value}")
-                                            st.divider()
-                    except Exception as e:
-                        st.sidebar.error(f"Error parsing extraction data: {e}")
+                # Add buttons to view CV or close details
+                col1, col2 = st.sidebar.columns(2)
                 
-                # Close button
-                if st.sidebar.button("Close Details"):
-                    st.session_state.view_cv_details = None
-                    st.rerun()
+                with col1:
+                    if st.button("View CV", use_container_width=True):
+                        # Add functionality to view CV file
+                        st.sidebar.info("CV viewer not implemented yet")
+                
+                with col2:
+                    if st.button("Close Details", use_container_width=True):
+                        st.session_state.view_candidate_details = None
+                        st.rerun()

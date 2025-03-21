@@ -44,26 +44,49 @@ def save_uploaded_file(uploaded_file, unique_filename=None):
     
     return file_name, file_path
 
-def delete_cv_file(file_path):
+def delete_cv_file(file_path: str) -> bool:
     """
     Delete a CV file from the data directory
     
     Args:
-        file_path: Path to the file to delete
+        file_path: Path to the file to delete (can be just filename or full path)
         
     Returns:
         bool: True if deleted successfully, False otherwise
     """
     try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logger.info(f"Deleted file {file_path}")
+        if not file_path:
+            logger.warning("File path is None or empty")
+            return False
+            
+        # Check if this is just a filename without path
+        if os.path.dirname(file_path) == '':
+            # It's just a filename, construct the full path
+            full_path = os.path.join(CV_DATA_DIR, file_path)
+        else:
+            # It already has a path component
+            full_path = file_path
+            
+        logger.info(f"Attempting to delete file: {full_path}")
+        
+        if os.path.exists(full_path):
+            os.remove(full_path)
+            logger.info(f"Successfully deleted file: {full_path}")
             return True
         else:
-            logger.warning(f"File not found: {file_path}")
+            logger.warning(f"File not found at path: {full_path}")
+            # Try alternative path as a fallback
+            alt_path = os.path.join(CV_DATA_DIR, os.path.basename(file_path))
+            if os.path.exists(alt_path) and alt_path != full_path:
+                os.remove(alt_path)
+                logger.info(f"Successfully deleted file from alternate path: {alt_path}")
+                return True
             return False
+    except PermissionError as pe:
+        logger.error(f"Permission error deleting file {file_path}: {pe}")
+        return False
     except Exception as e:
-        logger.error(f"Error deleting file {file_path}: {e}")
+        logger.error(f"Error deleting file {file_path}: {e}", exc_info=True)
         return False
 
 

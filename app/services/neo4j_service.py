@@ -8,7 +8,8 @@ from app.pyd_models.models import (
     PersonEntityWithMetadata,
     ResponseExperiences,
     ResponseSkills,
-    JobPostingData
+    JobPostingData,
+    EducationEntity
 )
 # Load environment variables
 load_dotenv()
@@ -144,58 +145,8 @@ class Neo4jService:
         
     #     logger.info("Neo4j constraints created")
         
-    
-    def get_all_roles(self):
-        """
-        Retrieve all job posting nodes from Neo4j with their skill relationships
-        
-        Returns:
-            list: List of dictionaries containing job posting information
-        """
-        if not self.connect():
-            logger.warning("Cannot connect to Neo4j to retrieve job postings")
-            return []
-        
-        try:
-            query = """
-            MATCH (posting:JobPosting)
-            OPTIONAL MATCH (posting)-[rel:REQUIRES_SKILL]->(skill:Skill)
-            WITH posting, 
-                 collect({name: skill.name, importance: rel.importance, is_required: rel.is_required}) AS skills
-            RETURN posting {
-                .*, 
-                skills: skills,
-                required_skills: CASE 
-                    WHEN size(skills) > 0 
-                    THEN reduce(s = "", skill IN skills | s + (CASE WHEN s = "" THEN "" ELSE ", " END) + skill.name) 
-                    ELSE "" 
-                END
-            } as role
-            """
-            
-            results = self.run_query(query)
-            
-            # Process results into the expected format
-            roles = []
-            if results:
-                for record in results:
-                    if 'role' in record:
-                        role_data = record['role']
-                        # Ensure job_title is available for display
-                        if 'title' in role_data and 'job_title' not in role_data:
-                            role_data['job_title'] = role_data['title']
-                        roles.append(role_data)
-                        
-                logger.info(f"Retrieved {len(roles)} JobPosting nodes from Neo4j")
-            else:
-                logger.warning("No JobPosting nodes found in Neo4j database")
-                
-            return roles
-            
-        except Exception as e:
-            logger.error(f"Error retrieving JobPosting nodes: {e}")
-            return []
-
+    def get_all_roles(self, role_id: str) -> List[Dict[str, Any]]:
+        pass
 
         
         
@@ -353,7 +304,7 @@ class Neo4jService:
                     if alternative_fields:
                         for alt_field in [f.strip() for f in alternative_fields.split(",") if f.strip()]:
                             tx.run("""
-                            MERGE (af:FieldOfStudy {name: $alt_field_name, is_alternative: true})
+                            MERGE (af:FieldOfStudy {name: $alt_field_name})
                             WITH af
                             MATCH (f:FieldOfStudy {name: $field_name})
                             CREATE (af)-[:ALTERNATIVE_OF]->(f)
@@ -392,7 +343,7 @@ class Neo4jService:
                     if alt_names:
                         for alt_name in [n.strip() for n in alt_names.split(",") if n.strip()]:
                             tx.run("""
-                            MERGE (as:Skill {name: $alt_name, is_alternative: true})
+                            MERGE (as:Skill {name: $alt_name})
                             WITH as
                             MATCH (s:Skill {name: $skill_name})
                             CREATE (as)-[:ALTERNATIVE_OF]->(s)
@@ -525,7 +476,7 @@ class Neo4jService:
                     if alternative_fields:
                         for alt_field in [f.strip() for f in alternative_fields.split(",") if f.strip()]:
                             tx.run("""
-                            MERGE (af:FieldOfStudy {name: $alt_field_name, is_alternative: true})
+                            MERGE (af:FieldOfStudy {name: $alt_field_name})
                             WITH af
                             MATCH (f:FieldOfStudy {name: $field_name})
                             CREATE (af)-[:ALTERNATIVE_OF]->(f)
@@ -564,7 +515,7 @@ class Neo4jService:
                     if alt_names:
                         for alt_name in [n.strip() for n in alt_names.split(",") if n.strip()]:
                             tx.run("""
-                            MERGE (as:Skill {name: $alt_name, is_alternative: true})
+                            MERGE (as:Skill {name: $alt_name})
                             WITH as
                             MATCH (s:Skill {name: $skill_name})
                             CREATE (as)-[:ALTERNATIVE_OF]->(s)
@@ -721,7 +672,6 @@ class Neo4jService:
         SET c.name = $name,
             c.job_title = $job_title,
             c.description = $description,
-            c.last_degree = $last_degree,
             c.cv_text = $cv_text,
             c.cv_file_address = $cv_file_address,
             c.created_at = datetime()
@@ -730,23 +680,43 @@ class Neo4jService:
             "name": person_data.name,
             "job_title": person_data.job_title,
             "description": person_data.description,
-            "last_degree": person_data.last_degree,
             "cv_text": person_data.cv_text,
             "cv_file_address": person_data.cv_file_address
         })
         
-        # Create FieldOfStudy node and relationship
-        if person_data.last_field_of_study:
-            tx.run("""
-            MERGE (f:FieldOfStudy {name: $field_name})
-            WITH f
-            MATCH (c:Candidate {id: $candidate_id})
-            MERGE (c)-[:HAS_FIELD_OF_STUDY {degree: $degree}]->(f)
-            """, {
-            "candidate_id": candidate_id,
-            "field_name": person_data.last_field_of_study.lower(),
-            "degree": person_data.last_degree if person_data.last_degree else ""
-            })
+        # Process education information from has_degrees list
+        if person_data.has_degrees and len(person_data.has_degrees) > 0:
+            for edu in person_data.has_degrees:
+                # Create Field of Study node
+                tx.run("""
+                MERGE (f:FieldOfStudy {name: $field_name})
+                WITH f
+                MATCH (c:Candidate {id: $candidate_id})
+                MERGE (c)-[:HAS_FIELD_OF_STUDY {
+                    university: $university,
+                    degree: $degree,
+                    graduation_year: $graduation_year
+                }]->(f)
+                """, {
+                    "candidate_id": candidate_id,
+                    "field_name": edu.field_of_study.lower(),
+                    "university": edu.university.lower(),
+                    "degree": edu.degree,
+                    "graduation_year": edu.graduation_year
+                })
+                
+                # Handle alternative fields as separate nodes with relationships
+                if edu.alternative_fields and len(edu.alternative_fields) > 0:
+                    for alt_field in edu.alternative_fields:
+                        tx.run("""
+                        MERGE (af:FieldOfStudy {name: $alt_field_name})
+                        WITH af
+                        MATCH (f:FieldOfStudy {name: $field_name})
+                        MERGE (af)-[:ALTERNATIVE_OF]->(f)
+                        """, {
+                            "alt_field_name": alt_field.lower(),
+                            "field_name": edu.field_of_study.lower()
+                        })
         
         for exp in experiences.experience:  # Changed from "experiences" to "experiences.experience"
             tx.run("""
@@ -800,7 +770,7 @@ class Neo4jService:
             if skill.alternative_names:
                 for alt_name in [n.strip() for n in skill.alternative_names.split(",") if n.strip()]:
                     tx.run("""
-                    MERGE (as:Skill {name: $alt_name, is_alternative: true})
+                    MERGE (as:Skill {name: $alt_name})
                     WITH as
                     MATCH (s:Skill {name: $skill_name})
                     MERGE (as)-[:ALTERNATIVE_OF]->(s)
@@ -808,3 +778,106 @@ class Neo4jService:
                     "alt_name": alt_name.lower(),
                     "skill_name": skill.name.lower() if skill.name else ""
                     })
+
+    def get_all_candidates(self) -> List[Dict[str, Any]]:
+        """
+        Get all candidates from the database
+        
+        Returns:
+            List of dictionaries containing candidate data
+        """
+        if not self.connect():
+            logger.warning("Cannot connect to Neo4j to fetch candidates")
+            return []
+        
+        query = """
+        MATCH (c:Candidate)
+        RETURN 
+            c.id as id,
+            c.name as name,
+            c.job_title as job_title,
+            c.description as description,
+            c.cv_file_address as file_path,
+            c.created_at as upload_date,
+            EXISTS((c)-[:HAS_SKILL]->()) as has_skills,
+            EXISTS((c)-[:HAS_EXPERIENCE]->()) as has_experience,
+            EXISTS((c)-[:HAS_FIELD_OF_STUDY]->()) as has_education
+        """
+        
+        try:
+            result = self.run_query(query)
+            return result if result else []
+        except Exception as e:
+            logger.error(f"Error fetching candidates: {e}")
+            return []
+
+    def delete_candidate(self, candidate_id: str) -> tuple[str, bool]:
+        """
+        Delete a candidate and all their relationships
+        
+        Args:
+            candidate_id: ID of the candidate to delete
+            
+        Returns:
+            bool: True if deleted successfully, False otherwise
+        """
+        if not self.connect():
+            logger.warning("Cannot connect to Neo4j to delete candidate")
+            return False
+        
+        # First get the file path before deleting
+        query_file_path = """
+        MATCH (c:Candidate {id: $candidate_id})
+        RETURN c.cv_file_address as file_path
+        """
+        
+        try:
+            result = self.run_query(query_file_path, {"candidate_id": candidate_id})
+            file_path = result[0]["file_path"] if result and "file_path" in result[0] else None
+            
+            # Delete the candidate and all relationships using DETACH DELETE
+            delete_query = """
+            MATCH (c:Candidate {id: $candidate_id})
+            DETACH DELETE c
+            """
+            
+            self.run_query(delete_query, {"candidate_id": candidate_id})
+            
+            return file_path, True
+        except Exception as e:
+            logger.error(f"Error deleting candidate: {e}")
+            return None, False
+
+    def delete_all_candidates(self) -> tuple[list[str], bool]:
+        """
+        Delete all candidates and their relationships
+        
+        Returns:
+            tuple: (list of file paths to delete, success boolean)
+        """
+        if not self.connect():
+            logger.warning("Cannot connect to Neo4j to delete all candidates")
+            return [], False
+        
+        # First get all file paths
+        query_file_paths = """
+        MATCH (c:Candidate)
+        RETURN c.cv_file_address as file_path
+        """
+        
+        try:
+            result = self.run_query(query_file_paths)
+            file_paths = [r["file_path"] for r in result if r.get("file_path")]
+            
+            # Delete all candidates and relationships using DETACH DELETE
+            delete_query = """
+            MATCH (c:Candidate)
+            DETACH DELETE c
+            """
+            
+            self.run_query(delete_query)
+            
+            return file_paths, True
+        except Exception as e:
+            logger.error(f"Error deleting all candidates: {e}")
+            return [], False

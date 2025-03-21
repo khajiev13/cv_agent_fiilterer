@@ -10,7 +10,7 @@ from app.pyd_models.models import (
     ResponseSkills,
     ResponseExperiences,
     JobPostingData,
-
+    EducationEntity,
 )
 
 # Set up logging
@@ -52,14 +52,21 @@ class DataExtractionService:
         - name: Full name of the candidate (lowercase)
         - job_title: Current professional role/title (lowercase)
         - description: Brief summary of background and specialization (1-2 sentences, max 100 characters, lowercase)
-        - last_field_of_study: The field or major of study (e.g., "computer science", "business") (lowercase)
-        - last_degree: MUST be EXACTLY one of these values only: "bachelor", "master", "phd", or "any" if unclear
+        - has_degrees: A list of education entries, each containing:
+          - university: Name of the university or institution (lowercase)
+          - degree: MUST be EXACTLY one of these values only: "bachelor", "master", "phd", or "any" if unclear
+          - field_of_study: The field or major of study (e.g., "computer science", "business") (lowercase)
+          - graduation_year: Year of graduation as a 4-digit integer (between 1900-2100, estimate if unclear)
+          - alternative_fields: List of alternative fields of study (e.g., ["information technology", "software engineering"])
         
         IMPORTANT:
         1. ALL text values MUST be lowercase
-        2. Do NOT include other education details, position, or skill information
-        3. Use "any" for last_degree ONLY if the degree level cannot be determined
+        2. Do NOT include position or skill information
+        3. Use "any" for degree ONLY if the degree level cannot be determined
         4. Ensure all fields are filled with appropriate values
+        5. For alternative_fields, include at least 2-3 closely related fields as a proper JSON array
+        6. No matter what language the CV is in, the output MUST be in English
+        7. If graduation_year cannot be determined, use the current year or estimate based on experience
         
         Resume text:
         $ctext
@@ -79,7 +86,8 @@ class DataExtractionService:
         3. Calculate experience_in_years based on start/end dates (round to nearest year)
         4. If exact dates aren't available, provide your best estimate
         5. experience_in_years MUST be a non-negative integer (0 if unclear)
-        6. For alternative_job_titles, provide at least 3 related job titles that use similar skills
+        6. For alternative_job_titles, provide at least 3 most related alternative job titles
+        7. No matter what language the CV is in, the output MUST be in English
         
         Resume text:
         $ctext
@@ -102,6 +110,7 @@ class DataExtractionService:
         6. Skills must be single distinct concepts - no compound skills (split "project management" into "project" and "management")
         7. For alternative_names, include abbreviations, variations, and closely related technologies
         8. Each skill should have at least 2-3 alternative names for better matching
+        9. No matter what language the CV is in, the output MUST be in English
         
         Resume text:
         $ctext
@@ -188,6 +197,7 @@ class DataExtractionService:
             6. Use "any" for degree_requirement ONLY if no specific requirement is mentioned
             7. Include all relevant fields of study, not just one
             8. Be precise and concise for maximum keyword matching effectiveness
+            9. No matter what language the job posting is in, the output MUST be in English
             """
             
             result = await self.job_posting_model.ainvoke(prompt.format(job_posting_text))
@@ -258,4 +268,3 @@ class DataExtractionService:
             }
         finally:
             logger.info(f"Finished extracting data from CV: {cv_filename}")
-            

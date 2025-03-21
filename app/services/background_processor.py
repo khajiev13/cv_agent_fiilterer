@@ -13,6 +13,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 class CVProcessorService:
+
+    data_extraction_service: DataExtractionService
+    neo4j_service: Neo4jService
+
     """Service to process CVs sequentially using a simple queue system"""
     
     def __init__(self):

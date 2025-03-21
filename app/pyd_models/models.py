@@ -5,14 +5,38 @@ from typing import List, Optional
 
 
 
+
+
+class EducationEntity(BaseModel):
+    university: str = ""
+    degree: Literal["bachelor", "master", "phd", "any"] = Field(default="any")
+    field_of_study: str = ""
+    graduation_year: int = 0
+    alternative_fields:List[str] = []  # List of alternative fields
+    @validator('graduation_year')
+    def check_graduation_year(cls, v):
+        if v < 1900 or v > 2100:
+            raise ValueError('graduation_year must be between 1900 and 2100')
+        return v
+    @validator('degree')
+    def check_degree(cls, v):
+        valid_degrees = ["bachelor", "master", "phd", "any"]
+        if v not in valid_degrees:
+            raise ValueError(f'degree must be one of {valid_degrees}')
+        return v
+    @validator('field_of_study')
+    def check_field_of_study(cls, v):
+        if not v:
+            raise ValueError('field_of_study cannot be empty')
+        return v
+    
 class PersonEntity(BaseModel):
     label: str = "Person"
     id: Optional[str]
     name: Optional[str]
     job_title: str = ""
     description: str = ""
-    last_field_of_study: str = ""
-    last_degree: Literal["bachelor", "master", "phd", "any"] = Field(default="any")
+    has_degrees: Optional[List[EducationEntity]]
 
 
 class PersonEntityWithMetadata(PersonEntity):
