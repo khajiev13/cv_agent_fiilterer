@@ -161,7 +161,7 @@ def prepare_edit_form(role):
     
     # Set other form fields
     for key in ['job_title', 'alternative_titles', 'degree_requirement', 'total_experience_years', 
-                'location', 'industry_sector', 'role_level', 'keywords']:
+                'location_city', 'industry_sector', 'role_level', 'keywords']:
         if key in role:
             st.session_state[key] = role[key]
     
@@ -174,6 +174,10 @@ def add_role_form(neo4j_service):
     """Form for adding a new role or editing an existing one"""
     data_extraction_service = DataExtractionService()
     
+    # Initialize location_city in session state if not present
+    if 'location_city' not in st.session_state:
+        st.session_state.location_city = ""
+        
     st.subheader("Role Details")
     
     # File uploader for job posting - outside the form
@@ -225,7 +229,8 @@ def add_role_form(neo4j_service):
                         st.session_state.fields_of_study = fields_of_study if fields_of_study else [{"name": "", "alternative_fields": "", "importance": "required"}]
                         st.session_state.total_experience_years = job_data.total_experience_years
                         st.session_state.required_skills = required_skills if required_skills else [{"name": "", "alternative_names": "", "importance": "required", "minimum_years": 0}]
-                        st.session_state.location = job_data.location
+                        # Replace location with location_city
+                        st.session_state.location_city = job_data.location_city
                         st.session_state.remote_option = job_data.remote_option
                         st.session_state.industry_sector = job_data.industry_sector
                         st.session_state.role_level = job_data.role_level
@@ -353,8 +358,9 @@ def add_role_form(neo4j_service):
         # Location and other info
         st.subheader("Additional Information")
         
-        location = st.text_input("Location", key="location", 
-                              help="The physical location of the job")
+        # Removed the location field
+        location_city = st.text_input("City", key="location_city",
+                                   help="The city where the job is located")
         
         remote_option = st.checkbox("Remote Work Option", key="remote_option",
                                  help="Check if the role can be performed remotely")
@@ -406,7 +412,8 @@ def add_role_form(neo4j_service):
                         fields_of_study=fields_of_study,
                         total_experience_years=total_experience_years,
                         required_skills=required_skills,
-                        location=location,
+                        # Removed location parameter
+                        location_city=location_city,
                         remote_option=remote_option,
                         industry_sector=industry_sector,
                         role_level=role_level,
@@ -424,7 +431,7 @@ def add_role_form(neo4j_service):
 def reset_form_fields():
     """Reset the form fields to default values"""
     for key in st.session_state.keys():
-        if key in ['job_title', 'alternative_titles', 'location', 'industry_sector', 'role_level', 'keywords']:
+        if key in ['job_title', 'alternative_titles', 'location_city', 'industry_sector', 'role_level', 'keywords']:
             st.session_state[key] = ""
         elif key == 'total_experience_years':
             st.session_state[key] = 0

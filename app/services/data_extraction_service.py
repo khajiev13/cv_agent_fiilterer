@@ -52,6 +52,7 @@ class DataExtractionService:
         - name: Full name of the candidate (lowercase)
         - job_title: Current professional role/title (lowercase)
         - description: Brief summary of background and specialization (1-2 sentences, max 100 characters, lowercase)
+        - location_city: Extract the candidate's current city location (lowercase, e.g., "new york", "san francisco")
         - has_degrees: A list of education entries, each containing:
           - university: Name of the university or institution (lowercase)
           - degree: MUST be EXACTLY one of these values only: "bachelor", "master", "phd", or "any" if unclear
@@ -67,6 +68,7 @@ class DataExtractionService:
         5. For alternative_fields, include at least 2-3 closely related fields as a proper JSON array
         6. No matter what language the CV is in, the output MUST be in English
         7. If graduation_year cannot be determined, use the current year or estimate based on experience
+        8. For location_city, extract only the city name, not country or state. If not found, leave empty
         
         Resume text:
         $ctext
@@ -182,7 +184,7 @@ class DataExtractionService:
                 # more skills...
               ]
             
-            - location: Physical job location (e.g., "new york, ny") or "remote" if fully remote
+            - location_city: Physical job location city only(e.g., "new york") or "remote" if fully remote (no shortened forms)
             - remote_option: "true" if remote work is possible, "false" otherwise
             - industry_sector: Industry the role belongs to (lowercase)
             - role_level: Seniority level (lowercase, e.g., "junior", "senior", "manager")

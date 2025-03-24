@@ -145,7 +145,7 @@ class Neo4jService:
         
     #     logger.info("Neo4j constraints created")
         
-    def get_all_roles(self, role_id: str) -> List[Dict[str, Any]]:
+    def get_all_roles(self) -> List[Dict[str, Any]]:
         pass
 
         
@@ -159,7 +159,7 @@ class Neo4jService:
         fields_of_study: Optional[List[Dict[str, Any]]] = None,  # Changed to match actual input type 
         total_experience_years: int = 0, 
         required_skills: Optional[List[Dict[str, Any]]] = None,  # Changed to match actual input type
-        location: Optional[str] = None, 
+        location_city: Optional[str] = None,  # Changed from location to location_city
         remote_option: Optional[bool] = False, 
         industry_sector: Optional[str] = None, 
         role_level: Optional[str] = None,
@@ -176,7 +176,7 @@ class Neo4jService:
             fields_of_study: List of dictionaries with name, alternative_fields and importance
             total_experience_years: Required years of experience
             required_skills: List of dictionaries with name, alternative_names, importance and minimum_years
-            location: Job location
+            location_city: Job location city
             remote_option: Remote work options
             industry_sector: Industry sector
             role_level: Level of the role
@@ -201,7 +201,7 @@ class Neo4jService:
                     fields_of_study,
                     total_experience_years,
                     required_skills,
-                    location,
+                    location_city,  # Changed from location to location_city
                     remote_option,
                     industry_sector,
                     role_level,
@@ -225,7 +225,7 @@ class Neo4jService:
         fields_of_study: Optional[List[Dict[str, Any]]] = None, 
         total_experience_years: int = 0, 
         required_skills: Optional[List[Dict[str, Any]]] = None,
-        location: Optional[str] = None, 
+        location_city: Optional[str] = None,  
         remote_option: Optional[bool] = False, 
         industry_sector: Optional[str] = None, 
         role_level: Optional[str] = None,
@@ -246,7 +246,7 @@ class Neo4jService:
         # Convert boolean to string for Neo4j compatibility
         remote_option_str = str(remote_option).lower()
         
-        # Create JobPosting node with all properties
+        # Create JobPosting node with all properties (excluding location)
         tx.run("""
         CREATE (jp:JobPosting {
             id: $posting_id,
@@ -255,7 +255,6 @@ class Neo4jService:
             alternative_titles: $alternative_titles,
             degree_requirement: $degree_requirement,
             total_experience_years: $total_experience_years,
-            location: $location,
             remote_option: $remote_option,
             industry_sector: $industry_sector,
             role_level: $role_level,
@@ -271,7 +270,6 @@ class Neo4jService:
             "alternative_titles": alternative_titles or "",
             "degree_requirement": degree_requirement or "any",
             "total_experience_years": total_experience_years or 0,
-            "location": location or "",
             "remote_option": remote_option_str,
             "industry_sector": industry_sector or "",
             "role_level": role_level or "",
@@ -279,6 +277,18 @@ class Neo4jService:
             "job_description": keywords or "",
             "posting_text": f"{job_title} - {industry_sector or ''} - {keywords or ''}"
         })
+        
+        # Create LocationCity node and relationship if location_city is provided
+        if location_city and location_city.strip():
+            tx.run("""
+            MERGE (lc:LocationCity {name: $location})
+            WITH lc
+            MATCH (jp:JobPosting {id: $posting_id})
+            CREATE (jp)-[:AT]->(lc)
+            """, {
+                "posting_id": role_id,
+                "location": location_city.strip().lower()
+            })
         
         # Process fields of study relationships directly to JobPosting
         if fields_of_study:
@@ -404,7 +414,7 @@ class Neo4jService:
         fields_of_study: Optional[List[Dict[str, Any]]] = None, 
         total_experience_years: int = 0, 
         required_skills: Optional[List[Dict[str, Any]]] = None,
-        location: Optional[str] = None, 
+        location_city: Optional[str] = None,  
         remote_option: Optional[bool] = False, 
         industry_sector: Optional[str] = None, 
         role_level: Optional[str] = None,
@@ -420,7 +430,7 @@ class Neo4jService:
         DELETE r
         """, {"posting_id": role_id})
         
-        # Update node properties
+        # Update node properties (excluding location which will be a separate node)
         remote_option_str = str(remote_option).lower()
         
         tx.run("""
@@ -430,7 +440,6 @@ class Neo4jService:
             jp.alternative_titles = $alternative_titles,
             jp.degree_requirement = $degree_requirement,
             jp.total_experience_years = $total_experience_years,
-            jp.location = $location,
             jp.remote_option = $remote_option,
             jp.industry_sector = $industry_sector,
             jp.role_level = $role_level,
@@ -444,7 +453,6 @@ class Neo4jService:
             "alternative_titles": alternative_titles or "",
             "degree_requirement": degree_requirement or "any",
             "total_experience_years": total_experience_years or 0,
-            "location": location or "",
             "remote_option": remote_option_str,
             "industry_sector": industry_sector or "",
             "role_level": role_level or "",
@@ -452,6 +460,18 @@ class Neo4jService:
             "job_description": keywords or "",
             "posting_text": f"{job_title} - {industry_sector or ''} - {keywords or ''}"
         })
+        
+        # Create LocationCity node and relationship if location_city is provided
+        if location_city and location_city.strip():
+            tx.run("""
+            MERGE (lc:LocationCity {name: $location})
+            WITH lc
+            MATCH (jp:JobPosting {id: $posting_id})
+            CREATE (jp)-[:AT]->(lc)
+            """, {
+                "posting_id": role_id,
+                "location": location_city.strip().lower()
+            })
         
         # Process fields of study
         if fields_of_study:
@@ -575,7 +595,7 @@ class Neo4jService:
         fields_of_study: Optional[List[Dict[str, Any]]] = None, 
         total_experience_years: int = 0, 
         required_skills: Optional[List[Dict[str, Any]]] = None,
-        location: Optional[str] = None, 
+        location_city: Optional[str] = None,  
         remote_option: Optional[bool] = False, 
         industry_sector: Optional[str] = None, 
         role_level: Optional[str] = None,
@@ -606,7 +626,7 @@ class Neo4jService:
                 fields_of_study,
                 total_experience_years,
                 required_skills,
-                location,
+                location_city,  
                 remote_option,
                 industry_sector,
                 role_level,
@@ -624,7 +644,7 @@ class Neo4jService:
                 fields_of_study,
                 total_experience_years,
                 required_skills,
-                location,
+                location_city,  
                 remote_option,
                 industry_sector,
                 role_level,
@@ -666,7 +686,65 @@ class Neo4jService:
         skills: ResponseSkills
     ) -> bool:
         
-        # Create Candidate node
+        # Prepare all parameters for the first query
+        # Education parameters
+        education_params = []
+        alt_fields_params = []
+        for edu in person_data.has_degrees or []:
+            if edu.field_of_study and edu.field_of_study.strip():
+                education_params.append({
+                    "field": edu.field_of_study.lower(),
+                    "university": edu.university.lower() if edu.university else "",
+                    "degree": edu.degree or "",
+                    "year": edu.graduation_year or 0
+                })
+                
+                if edu.alternative_fields:
+                    for alt_field in edu.alternative_fields:
+                        if alt_field.strip():
+                            alt_fields_params.append({
+                                "main_field": edu.field_of_study.lower(),
+                                "alt_field": alt_field.lower()
+                            })
+        
+        # Experience parameters
+        experience_params = []
+        alt_exp_params = []
+        for exp in experiences.experience or []:
+            if exp.job_title and exp.job_title.strip():
+                experience_params.append({
+                    "title": exp.job_title.lower(),
+                    "years": exp.experience_in_years or 0,
+                    "company": exp.company_name or "",
+                    "description": exp.description or ""
+                })
+                
+                if exp.alternative_job_titles:
+                    for alt in [t.strip() for t in exp.alternative_job_titles.split(",") if t.strip()]:
+                        alt_exp_params.append({
+                            "main_title": exp.job_title.lower(),
+                            "alt_title": alt.lower()
+                        })
+        
+        # Skill parameters
+        skill_params = []
+        alt_skill_params = []
+        for skill in skills.skills or []:
+            if skill.name and skill.name.strip():
+                skill_params.append({
+                    "name": skill.name.lower(),
+                    "level": skill.level or "beginner",
+                    "years": skill.years_experience or 0
+                })
+                
+                if skill.alternative_names:
+                    for alt in [n.strip() for n in skill.alternative_names.split(",") if n.strip()]:
+                        alt_skill_params.append({
+                            "main_skill": skill.name.lower(),
+                            "alt_skill": alt.lower()
+                        })
+        
+        # Execute the first query with all direct relationships
         tx.run("""
         MERGE (c:Candidate {id: $candidate_id})
         SET c.name = $name,
@@ -675,109 +753,87 @@ class Neo4jService:
             c.cv_text = $cv_text,
             c.cv_file_address = $cv_file_address,
             c.created_at = datetime()
+    
+        // Location if provided
+        WITH c
+        FOREACH (loc IN CASE WHEN $location <> '' THEN [1] ELSE [] END |
+          MERGE (lc:LocationCity {name: $location})
+          MERGE (c)-[:FROM]->(lc)
+        )
+    
+        // Add all educational backgrounds
+        WITH c
+        UNWIND $education AS edu
+        MERGE (f:FieldOfStudy {name: edu.field})
+        MERGE (c)-[:HAS_FIELD_OF_STUDY {
+          university: edu.university,
+          degree: edu.degree,
+          graduation_year: edu.year
+        }]->(f)
+    
+        // Add all experiences
+        WITH c
+        UNWIND $experiences AS exp
+        MERGE (e:Experience {title: exp.title})
+        MERGE (c)-[:HAS_EXPERIENCE {
+          years: exp.years,
+          company: exp.company,
+          description: exp.description
+        }]->(e)
+    
+        // Add all skills
+        WITH c
+        UNWIND $skills AS skill
+        MERGE (s:Skill {name: skill.name})
+        MERGE (c)-[:HAS_SKILL {
+          level: skill.level,
+          years: skill.years
+        }]->(s)
         """, {
             "candidate_id": candidate_id,
             "name": person_data.name,
             "job_title": person_data.job_title,
             "description": person_data.description,
             "cv_text": person_data.cv_text,
-            "cv_file_address": person_data.cv_file_address
+            "cv_file_address": person_data.cv_file_address,
+            "location": person_data.location_city.strip().lower() if hasattr(person_data, 'location_city') and person_data.location_city else "",
+            "education": education_params,
+            "experiences": experience_params,
+            "skills": skill_params
         })
         
-        # Process education information from has_degrees list
-        if person_data.has_degrees and len(person_data.has_degrees) > 0:
-            for edu in person_data.has_degrees:
-                # Create Field of Study node
-                tx.run("""
-                MERGE (f:FieldOfStudy {name: $field_name})
-                WITH f
-                MATCH (c:Candidate {id: $candidate_id})
-                MERGE (c)-[:HAS_FIELD_OF_STUDY {
-                    university: $university,
-                    degree: $degree,
-                    graduation_year: $graduation_year
-                }]->(f)
-                """, {
-                    "candidate_id": candidate_id,
-                    "field_name": edu.field_of_study.lower(),
-                    "university": edu.university.lower(),
-                    "degree": edu.degree,
-                    "graduation_year": edu.graduation_year
-                })
-                
-                # Handle alternative fields as separate nodes with relationships
-                if edu.alternative_fields and len(edu.alternative_fields) > 0:
-                    for alt_field in edu.alternative_fields:
-                        tx.run("""
-                        MERGE (af:FieldOfStudy {name: $alt_field_name})
-                        WITH af
-                        MATCH (f:FieldOfStudy {name: $field_name})
-                        MERGE (af)-[:ALTERNATIVE_OF]->(f)
-                        """, {
-                            "alt_field_name": alt_field.lower(),
-                            "field_name": edu.field_of_study.lower()
-                        })
-        
-        for exp in experiences.experience:  # Changed from "experiences" to "experiences.experience"
+        # Execute second query for all alternatives if needed
+        if alt_fields_params or alt_exp_params or alt_skill_params:
             tx.run("""
-            MERGE (e:Experience {title: $job_title})
-            WITH e
-            MATCH (c:Candidate {id: $candidate_id})
-            CREATE (c)-[:HAS_EXPERIENCE {
-            years: $experience_years,
-            company: $company_name,
-            description: $description
-            }]->(e)
+            // Process alternative fields
+            UNWIND $alt_fields AS alt
+            MERGE (af:FieldOfStudy {name: alt.alt_field})
+            WITH af, alt
+            MATCH (f:FieldOfStudy {name: alt.main_field})
+            MERGE (af)-[:ALTERNATIVE_OF]->(f)
+    
+            // Process alternative experiences
+            WITH 1 as dummy
+            UNWIND $alt_experiences AS alt_exp
+            MERGE (ae:Experience {title: alt_exp.alt_title})
+            WITH ae, alt_exp
+            MATCH (e:Experience {title: alt_exp.main_title})
+            MERGE (ae)-[:ALTERNATIVE_OF]->(e)
+    
+            // Process alternative skills
+            WITH 1 as dummy
+            UNWIND $alt_skills AS alt_skill
+            MERGE (as:Skill {name: alt_skill.alt_skill})
+            WITH as, alt_skill
+            MATCH (s:Skill {name: alt_skill.main_skill})
+            MERGE (as)-[:ALTERNATIVE_OF]->(s)
             """, {
-            "candidate_id": candidate_id,
-            "job_title": exp.job_title.lower() if exp.job_title else "",
-            "experience_years": exp.experience_in_years if exp.experience_in_years else 0,
-            "company_name": exp.company_name if exp.company_name else "",
-            "description": exp.description if exp.description else ""
+                "alt_fields": alt_fields_params,
+                "alt_experiences": alt_exp_params,
+                "alt_skills": alt_skill_params
             })
-            
-            # Add alternative job titles
-            if exp.alternative_job_titles:
-                for alt_title in [t.strip() for t in exp.alternative_job_titles.split(",") if t.strip()]:
-                    tx.run("""
-                    MERGE (ae:Experience {title: $alt_title})
-                    WITH ae
-                    MATCH (e:Experience {title: $job_title})
-                    MERGE (ae)-[:ALTERNATIVE_OF]->(e)
-                    """, {
-                    "alt_title": alt_title.lower(),
-                    "job_title": exp.job_title.lower() if exp.job_title else ""
-                    })
         
-        # Process skills - Access the skills list correctly
-        for skill in skills.skills:  # Changed from "skills" to "skills.skills"
-            tx.run("""
-            MERGE (s:Skill {name: $skill_name})
-            WITH s
-            MATCH (c:Candidate {id: $candidate_id})
-            CREATE (c)-[:HAS_SKILL {
-            level: $level,
-            years: $years
-            }]->(s)
-            """, {
-            "candidate_id": candidate_id,
-            "skill_name": skill.name.lower() if skill.name else "",
-            "level": skill.level if skill.level else "beginner",
-            "years": skill.years_experience if skill.years_experience else 0
-            })
-            
-            # Add alternative skill names
-            if skill.alternative_names:
-                for alt_name in [n.strip() for n in skill.alternative_names.split(",") if n.strip()]:
-                    tx.run("""
-                    MERGE (as:Skill {name: $alt_name})
-                    WITH as
-                    MATCH (s:Skill {name: $skill_name})
-                    MERGE (as)-[:ALTERNATIVE_OF]->(s)
-                    """, {
-                    "alt_name": alt_name.lower(),
-                    "skill_name": skill.name.lower() if skill.name else ""
-                    })
+        return True
 
     def get_all_candidates(self) -> List[Dict[str, Any]]:
         """

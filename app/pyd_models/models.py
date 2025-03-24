@@ -37,6 +37,8 @@ class PersonEntity(BaseModel):
     job_title: str = ""
     description: str = ""
     has_degrees: Optional[List[EducationEntity]]
+    location_city: Optional[str] = None  
+
 
 
 class PersonEntityWithMetadata(PersonEntity):
@@ -112,7 +114,7 @@ class JobPostingData(BaseModel):
     required_skills: List[SkillRequirement] = []
     
     # Location and other info
-    location: str = ""
+    location_city: str = ""
     remote_option: bool = False
     industry_sector: str = ""
     role_level: str = ""
