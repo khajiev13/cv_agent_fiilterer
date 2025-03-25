@@ -146,10 +146,65 @@ class Neo4jService:
     #     logger.info("Neo4j constraints created")
         
     def get_all_roles(self) -> List[Dict[str, Any]]:
-        pass
+        """
+        Get all job roles/postings from the database with their relationships
+        
+        Returns:
+            List of dictionaries containing role data with related fields, skills, etc.
+        """
+        if not self.connect():
+            logger.warning("Cannot connect to Neo4j to fetch roles")
+            return []
+        
+        query = """
+        MATCH (job:JobPosting)
+        
+        // Get required skills with importance
+        OPTIONAL MATCH (job)-[rs:REQUIRES_SKILL]->(skill:Skill)
+        WITH job, 
+             collect({name: skill.name, importance: rs.importance, minimum_years: rs.minimum_years}) as skills
+        
+        // Get fields of study
+        OPTIONAL MATCH (job)-[rf:REQUIRES_FIELD_OF_STUDY]->(field:FieldOfStudy)
+        WITH job, skills, 
+             collect({name: field.name, importance: rf.importance}) as fields_of_study
+        
+        // Get location
+        OPTIONAL MATCH (job)-[:AT]->(loc:LocationCity)
+        
+        // Get required experiences
+        OPTIONAL MATCH (job)-[re:REQUIRES_EXPERIENCE]->(exp:Experience)
+        WITH job, skills, fields_of_study, loc,
+             collect({title: exp.title, years: re.years}) as experiences
+             
+        RETURN 
+            job.id as id,
+            job.job_title as job_title,
+            job.title as title,
+            job.alternative_titles as alternative_titles,
+            job.degree_requirement as degree_requirement,
+            job.total_experience_years as experience_years,
+            job.remote_option as remote_option,
+            job.industry_sector as industry_sector,
+            job.role_level as role_level,
+            job.keywords as keywords,
+            job.created_at as created_at,
+            job.updated_at as updated_at,
+            loc.name as location,
+            skills,
+            fields_of_study,
+            experiences
+        ORDER BY 
+            COALESCE(job.updated_at, job.created_at) DESC
+        """
+        
+        try:
+            result = self.run_query(query)
+            return result if result else []
+        except Exception as e:
+            logger.error(f"Error fetching roles: {e}")
+            return []
 
-        
-        
     def add_role(
         self, 
         role_id: str, 
@@ -159,6 +214,7 @@ class Neo4jService:
         fields_of_study: Optional[List[Dict[str, Any]]] = None,  # Changed to match actual input type 
         total_experience_years: int = 0, 
         required_skills: Optional[List[Dict[str, Any]]] = None,  # Changed to match actual input type
+        required_experiences: Optional[List[Dict[str, Any]]] = None,  # Added parameter
         location_city: Optional[str] = None,  # Changed from location to location_city
         remote_option: Optional[bool] = False, 
         industry_sector: Optional[str] = None, 
@@ -176,6 +232,7 @@ class Neo4jService:
             fields_of_study: List of dictionaries with name, alternative_fields and importance
             total_experience_years: Required years of experience
             required_skills: List of dictionaries with name, alternative_names, importance and minimum_years
+            required_experiences: List of dictionaries with title and years required
             location_city: Job location city
             remote_option: Remote work options
             industry_sector: Industry sector
@@ -201,6 +258,7 @@ class Neo4jService:
                     fields_of_study,
                     total_experience_years,
                     required_skills,
+                    required_experiences,  # Added parameter
                     location_city,  # Changed from location to location_city
                     remote_option,
                     industry_sector,
@@ -225,6 +283,7 @@ class Neo4jService:
         fields_of_study: Optional[List[Dict[str, Any]]] = None, 
         total_experience_years: int = 0, 
         required_skills: Optional[List[Dict[str, Any]]] = None,
+        required_experiences: Optional[List[Dict[str, Any]]] = None,  # Added parameter
         location_city: Optional[str] = None,  
         remote_option: Optional[bool] = False, 
         industry_sector: Optional[str] = None, 
@@ -388,6 +447,24 @@ class Neo4jService:
                         "alt_title": alt_title,
                         "total_experience_years": total_experience_years
                     })
+        
+        # Process required experiences explicitly defined
+        if required_experiences:
+            for exp in required_experiences:
+                if isinstance(exp, dict) and 'title' in exp and exp['title'].strip():
+                    exp_title = exp['title'].strip().lower()
+                    years = exp.get('years', 0)
+                    
+                    tx.run("""
+                    MERGE (e:Experience {title: $exp_title})
+                    WITH e
+                    MATCH (jp:JobPosting {id: $posting_id})
+                    CREATE (jp)-[:REQUIRES_EXPERIENCE {years: $years}]->(e)
+                    """, {
+                        "posting_id": role_id,
+                        "exp_title": exp_title,
+                        "years": years
+                    })
             
         # Add any explicit keywords as Keyword nodes
         if keywords:
@@ -414,6 +491,7 @@ class Neo4jService:
         fields_of_study: Optional[List[Dict[str, Any]]] = None, 
         total_experience_years: int = 0, 
         required_skills: Optional[List[Dict[str, Any]]] = None,
+        required_experiences: Optional[List[Dict[str, Any]]] = None,  # Added parameter
         location_city: Optional[str] = None,  
         remote_option: Optional[bool] = False, 
         industry_sector: Optional[str] = None, 
@@ -570,6 +648,24 @@ class Neo4jService:
                         "total_experience_years": total_experience_years
                     })
         
+        # Process required experiences explicitly defined
+        if required_experiences:
+            for exp in required_experiences:
+                if isinstance(exp, dict) and 'title' in exp and exp['title'].strip():
+                    exp_title = exp['title'].strip().lower()
+                    years = exp.get('years', 0)
+                    
+                    tx.run("""
+                    MERGE (e:Experience {title: $exp_title})
+                    WITH e
+                    MATCH (jp:JobPosting {id: $posting_id})
+                    CREATE (jp)-[:REQUIRES_EXPERIENCE {years: $years}]->(e)
+                    """, {
+                        "posting_id": role_id,
+                        "exp_title": exp_title,
+                        "years": years
+                    })
+        
         # Add keywords
         if keywords:
             for keyword in [k.strip() for k in keywords.split(",") if k.strip()]:
@@ -595,6 +691,7 @@ class Neo4jService:
         fields_of_study: Optional[List[Dict[str, Any]]] = None, 
         total_experience_years: int = 0, 
         required_skills: Optional[List[Dict[str, Any]]] = None,
+        required_experiences: Optional[List[Dict[str, Any]]] = None,  # Added parameter
         location_city: Optional[str] = None,  
         remote_option: Optional[bool] = False, 
         industry_sector: Optional[str] = None, 
@@ -626,6 +723,7 @@ class Neo4jService:
                 fields_of_study,
                 total_experience_years,
                 required_skills,
+                required_experiences,  # Added parameter
                 location_city,  
                 remote_option,
                 industry_sector,
@@ -644,12 +742,69 @@ class Neo4jService:
                 fields_of_study,
                 total_experience_years,
                 required_skills,
+                required_experiences,  # Added parameter
                 location_city,  
                 remote_option,
                 industry_sector,
                 role_level,
                 keywords
             )
+        
+    def add_candidate(
+        self,
+        candidate_id: str,
+        person_data: PersonEntityWithMetadata,
+        experiences: ResponseExperiences,
+        skills: ResponseSkills
+    ) -> bool:
+        logger.info(f"Attempting to add candidate with metadata: {person_data}")
+
+        if not self.connect():
+            return False
+        
+        try:
+            with self.driver.session() as session:
+                session.execute_write(
+                    self._create_candidate_transaction,
+                    candidate_id,
+                    person_data,
+                    experiences,
+                    skills
+                )
+            return True
+        except Exception as e:
+            logger.error(f"Error adding candidate: {e}")
+            return False
+    
+    def delete_role(self, role_id: str) -> bool:
+        """
+        Delete a role and all its relationships
+        
+        Args:
+            role_id: ID of the role to delete
+            
+        Returns:
+            bool: True if deleted successfully, False otherwise
+        """
+        if not self.connect():
+            logger.warning("Cannot connect to Neo4j to delete role")
+            return False
+        
+        try:
+            with self.driver.session() as session:
+                session.execute_write(self._delete_role_transaction, role_id)
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting role: {e}")
+            return False
+    
+    def _delete_role_transaction(self, tx: Transaction, role_id: str) -> None:
+        """Delete a role and all its relationships in Neo4j"""
+        # Delete the job posting and all relationships
+        tx.run("""
+        MATCH (jp:JobPosting {id: $role_id})
+        DETACH DELETE jp
+        """, {"role_id": role_id})
         
     def add_candidate(
         self,

@@ -99,6 +99,16 @@ class FieldOfStudy(BaseModel):
     alternative_fields: str = ""  # Comma-separated alternatives
     importance: Literal["required", "preferred", "nice-to-have"] = "required"
 
+class ExperienceRequirement(BaseModel):
+    role: str
+    alternative_roles: str = ""  # Comma-separated alternatives
+    minimum_years: int = 0
+    importance: Literal["required", "preferred", "nice-to-have"] = "required"
+    
+    @validator('minimum_years')
+    def check_minimum_years(cls, v):
+        return max(0, v)  # Ensure non-negative
+
 class JobPostingData(BaseModel):
     job_title: str = ""
     alternative_titles: str = ""  # Store as comma-separated values
@@ -109,6 +119,7 @@ class JobPostingData(BaseModel):
     
     # Experience
     total_experience_years: int = 0
+    required_experiences: List[ExperienceRequirement] = []  # New field for specific experience requirements
     
     # Skills - now more structured
     required_skills: List[SkillRequirement] = []

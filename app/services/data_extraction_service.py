@@ -173,6 +173,17 @@ class DataExtractionService:
             
             - total_experience_years: Required minimum experience as a non-negative INTEGER (0 if unspecified)
             
+            # Required specific experiences as JSON array
+            - required_experiences: JSON array of objects with structure:
+              [
+                {{"role": "experience role (e.g., project management)", 
+                  "alternative_roles": "similar roles (e.g., program management, product management)", 
+                  "importance": "required|preferred|nice-to-have",
+                  "minimum_years": non-negative integer (0 if not specified)
+                }},
+                # more experiences...
+              ]
+            
             # Required skills as JSON array
             - required_skills: JSON array of objects with structure:
               [
@@ -194,8 +205,8 @@ class DataExtractionService:
             1. ALL text values MUST be lowercase
             2. Format JSON arrays exactly as shown with proper syntax
             3. Include as many job titles
-            4. Include as many required skills
-            5. For each skill and field of study, provide alternative names/fields
+            4. Include as many required skills and specific experiences
+            5. For each skill, field of study, and experience, provide alternative names/fields
             6. Use "any" for degree_requirement ONLY if no specific requirement is mentioned
             7. Include all relevant fields of study, not just one
             8. Be precise and concise for maximum keyword matching effectiveness
