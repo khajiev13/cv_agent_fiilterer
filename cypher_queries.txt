@@ -1,0 +1,150 @@
+Query to list people based on their experiences.
+
+// 1. Start with the specified job posting
+MATCH (job:JobPosting)
+WHERE job.job_title CONTAINS 'ad operations specialist'
+
+// 2. Find all direct required experiences
+MATCH (job)-[req_rel:REQUIRES_EXPERIENCE]->(required_exp:Experience)
+
+// 3. Create a collection of required experiences and their alternatives
+WITH job, collect(required_exp) AS direct_required_exps
+MATCH (req_exp:Experience)
+WHERE req_exp IN direct_required_exps
+OPTIONAL MATCH (req_exp)-[:ALTERNATIVE_OF*1..2]-(alt_exp:Experience)
+WITH job, direct_required_exps, 
+     collect(DISTINCT req_exp) + collect(DISTINCT alt_exp) AS all_viable_experiences
+
+// 4. Find candidates with any of these experiences
+MATCH (candidate:Candidate)-[has_rel:HAS_EXPERIENCE]->(candidate_exp:Experience)
+WHERE candidate_exp IN all_viable_experiences
+
+// 5. Calculate match scores with improved weighting - now includes component score
+WITH job, candidate, candidate_exp, has_rel.years AS exp_years, direct_required_exps,
+     // Base score component
+     CASE 
+       WHEN candidate_exp IN direct_required_exps THEN 0.4  // Base score for direct match
+       ELSE 0.2  // Base score for alternative match
+     END AS base_score,
+     
+     // Experience years component
+     CASE 
+       WHEN candidate_exp IN direct_required_exps THEN 0.6  // Higher weight for direct years
+       ELSE 0.5  // Lower weight for alternative years
+     END * CASE
+       WHEN has_rel.years >= 3 THEN 1.0  // Full points for 3+ years
+       WHEN has_rel.years = 0 THEN 0.1   // Minimum value for any experience
+       ELSE (has_rel.years/3) + 0.1      // Base value plus years-based component
+     END AS years_score,
+     
+     // Calculate the component score here while has_rel is in scope
+     round((
+       CASE WHEN candidate_exp IN direct_required_exps THEN 0.4 ELSE 0.2 END + 
+       (CASE WHEN candidate_exp IN direct_required_exps THEN 0.6 ELSE 0.5 END * 
+        CASE WHEN has_rel.years >= 3 THEN 1.0 WHEN has_rel.years = 0 THEN 0.1 
+        ELSE (has_rel.years/3) + 0.1 END)
+     )*100)/100 AS component_score
+
+// 6. Calculate improved total score and aggregate candidate details
+WITH job, candidate,
+     round(sum(base_score + years_score)*100)/100 AS total_score, // Rounded to 2 decimal places
+     count(DISTINCT candidate_exp) AS experience_matches,
+     collect(DISTINCT candidate_exp.title) AS matched_experiences,
+     collect(DISTINCT {
+       experience: candidate_exp.title, 
+       years: exp_years, 
+       is_direct_match: candidate_exp IN direct_required_exps,
+       component_score: component_score  // Use pre-calculated component score
+     }) AS details
+
+// 7. Return ranked candidates with detailed match information
+RETURN 
+    candidate.name AS candidate_name,
+    total_score AS match_score,
+    experience_matches AS total_matches,
+    matched_experiences,
+    details AS match_details,
+    job.job_title AS job_title
+ORDER BY match_score DESC, experience_matches DESC, candidate.name ASC
+LIMIT 10
+
+
+
+// 1. Start with the specified job posting
+MATCH (job:JobPosting)
+WHERE job.job_title CONTAINS 'ad operations specialist'
+
+// 2. Find all direct required skills and their properties
+MATCH (job)-[req_rel:REQUIRES_SKILL]->(required_skill:Skill)
+WITH job, collect(required_skill) AS required_skills, collect(req_rel) AS req_rels
+
+// 3. For each required skill, collect itself and its alternatives
+UNWIND range(0, size(required_skills)-1) AS i
+WITH job, required_skills[i] AS required_skill, req_rels[i] AS req_rel
+OPTIONAL MATCH (required_skill)-[:ALTERNATIVE_OF*0..2]-(viable_skill:Skill)
+WITH job, required_skill, req_rel, 
+     CASE WHEN count(viable_skill) > 0 THEN collect(DISTINCT viable_skill) ELSE [required_skill] END AS viable_skills
+WITH job, collect({required_skill: required_skill, req_rel: req_rel, viable_skills: viable_skills}) AS skill_requirements
+
+// 4. Find candidates with matching skills
+MATCH (candidate:Candidate)-[has_rel:HAS_SKILL]->(candidate_skill:Skill)
+WHERE any(sr IN skill_requirements WHERE 
+          any(viable IN sr.viable_skills WHERE 
+              toLower(viable.name) = toLower(candidate_skill.name)))
+
+// 5. Calculate matching information for each skill
+WITH job, candidate, skill_requirements, candidate_skill, has_rel,
+     [sr IN skill_requirements WHERE 
+      any(viable IN sr.viable_skills WHERE 
+          toLower(viable.name) = toLower(candidate_skill.name))] AS matching_requirements
+
+// 6. Calculate component scores with modified weighting (30% years, 70% level)
+WITH job, candidate, candidate_skill, has_rel,
+     (CASE WHEN any(req IN matching_requirements WHERE toLower(req.required_skill.name) = toLower(candidate_skill.name))
+           THEN true ELSE false END) AS is_direct_match,
+     round((
+       // Match type factor (unchanged)
+       CASE WHEN any(req IN matching_requirements WHERE toLower(req.required_skill.name) = toLower(candidate_skill.name)) 
+            THEN 1.0 ELSE 0.7 END * 
+       
+       // Combined weighted factors
+       (0.3 * CASE WHEN any(req IN matching_requirements WHERE toInteger(req.req_rel.minimum_years) > 0)
+                 THEN CASE WHEN toFloat(has_rel.years) / toInteger(apoc.coll.max([req IN matching_requirements | req.req_rel.minimum_years])) < 1.0 
+                           THEN toFloat(has_rel.years) / toInteger(apoc.coll.max([req IN matching_requirements | req.req_rel.minimum_years]))
+                           ELSE 1.0 END
+                 ELSE 1.0 END
+        + 
+        0.7 * CASE toLower(has_rel.level)
+                WHEN 'beginner' THEN 0.5
+                WHEN 'intermediate' THEN 0.75
+                WHEN 'advanced' THEN 1.0
+                WHEN 'expert' THEN 1.2
+                ELSE 0.5 END)
+     ) * 100) / 100 AS component_score
+
+// 7. Aggregate all skill matches for each candidate
+WITH job, candidate, 
+     collect(DISTINCT {
+       skill: candidate_skill.name,
+       years: has_rel.years,
+       level: has_rel.level,
+       is_direct_match: is_direct_match,
+       component_score: component_score
+     }) AS match_details
+
+// 8. Calculate summary statistics for ranking
+WITH job, candidate, match_details,
+     [detail IN match_details | detail.skill] AS matched_skills,
+     reduce(s = 0.0, detail IN match_details | s + detail.component_score) AS total_score,
+     size(match_details) AS skill_matches
+
+// 9. Return ranked candidates with detailed match information
+RETURN 
+    candidate.name AS candidate_name,
+    round(total_score * 100) / 100 AS match_score,
+    skill_matches AS total_matches,
+    matched_skills,
+    match_details,
+    job.job_title AS job_title
+ORDER BY match_score DESC, skill_matches DESC, candidate.name ASC
+LIMIT 10

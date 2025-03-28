@@ -96,27 +96,40 @@ class DataExtractionService:
         """
     
         self.skills_prompt_tpl = """From the Resume text below, extract ALL professional skills with consistent formatting.
-        
+
         For EACH skill, extract the following fields exactly:
-        - name: The specific skill (lowercase)
+        - name: The specific skill name (lowercase, keep meaningful phrases together)
         - alternative_names: Comma-separated list of related skills, variations, or technologies (lowercase, e.g., "react.js, reactjs, react native")
-        - level: MUST be EXACTLY one of: "beginner", "intermediate", or "expert"
+        - level: MUST be EXACTLY one of: "beginner", "intermediate", "advanced", or "expert"
         - years_experience: Number of years using this skill as an INTEGER (must be non-negative)
-        
+
         IMPORTANT:
         1. ALL text values MUST be lowercase
         2. Extract EVERY technical and professional skill mentioned
-        3. Infer the skill level from context (defaulting to "beginner" if unclear)
-        4. If years_experience cannot be determined, use 1
-        5. years_experience MUST be a non-negative integer
-        6. Skills must be single distinct concepts - no compound skills (split "project management" into "project" and "management")
-        7. For alternative_names, include abbreviations, variations, and closely related technologies
-        8. Each skill should have at least 2-3 alternative names for better matching
-        9. No matter what language the CV is in, the output MUST be in English
-        
+        3. Infer skill levels using these guidelines:
+        - beginner: Basic understanding, minimal practical experience
+        - intermediate: Regular usage, comfortable with common applications
+        - advanced: Deep knowledge, can solve complex problems, 3+ years typical experience
+        - expert: Mastery level, can teach others, 5+ years typical experience
+        4. If years_experience is mentioned, use that exact value; otherwise infer based on:
+        - Recent graduates/entry positions: 0-1 years
+        - Mid-level positions: 2-4 years
+        - Senior positions: 5+ years
+        5. Keep meaningful compound skills together (e.g., "project management", "digital marketing")
+        6. For alternative_names, include:
+        - Common abbreviations (JavaScript → js)
+        - Related technologies (React → react.js, reactjs)
+        - Broader/narrower categories (python → programming, coding)
+        7. No matter what language the CV is in, the output MUST be in English
+
         Resume text:
         $ctext
         """
+        # 6. Create standardized skill categories:
+        # - Technical: programming languages, frameworks, tools
+        # - Domain: industry-specific knowledge
+        # - Soft skills: communication, leadership
+        # - Languages: spoken/written languages with fluency level
     def clean_text(self, text):
         """Clean text to remove non-ASCII characters"""
         return re.sub(r'[^\x00-\x7F]+', ' ', text)
